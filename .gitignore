@@ -1,1 +1,8 @@
 github_deploy_key
+github_deploy_key
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+repomix-output.md
