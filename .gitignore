@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 venv/
 repomix-output.md
+github_deploy_key.pub
