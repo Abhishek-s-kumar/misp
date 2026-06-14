@@ -1,0 +1,14 @@
+pymisp>=2.4.170
+requests>=2.31.0
+pydantic>=2.0.0
+validators>=0.22.0
+gitpython>=3.1.40
+ansible-core>=2.15.0
+mcp>=1.27.0
+python-dotenv>=1.0.0
+structlog>=23.0.0
+tenacity>=8.2.0
+schedule>=1.2.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+ruff>=0.1.0

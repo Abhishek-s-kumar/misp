@@ -1,0 +1,53 @@
+---
+- name: Deploy MISP IOC CDB Lists to Wazuh Managers
+  hosts: "{{ target_hosts | default('wazuh_managers') }}"
+  serial: 1
+  gather_facts: false
+
+  vars:
+    repo_path: "{{ lookup('env', 'TI_REPO_PATH') | default('/home/kali/Desktop/misp/repository', true) }}"
+
+  tasks:
+    - name: Ensure CDB lists directory exists (local mock only)
+      ansible.builtin.file:
+        path: "{{ wazuh_lists_dir }}"
+        state: directory
+        mode: "0755"
+      when: is_local_mock | bool
+
+    - name: Deploy CDB lists
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/iocs/{{ item.name }}"
+        dest: "{{ wazuh_lists_dir }}/{{ item.name }}"
+        owner: "{{ ansible_env.USER | default('kali') if is_local_mock | bool else wazuh_file_owner }}"
+        group: "{{ ansible_env.USER | default('kali') if is_local_mock | bool else wazuh_file_group }}"
+        mode: "{{ wazuh_file_mode }}"
+        backup: true
+      loop: "{{ cdb_lists }}"
+      register: copy_results
+
+    - name: Test Wazuh configuration
+      ansible.builtin.command: "{{ wazuh_bin }}/wazuh-analysisd -t"
+      register: config_test
+      changed_when: false
+      when: not (is_local_mock | bool)
+
+    - name: Abort if config test failed
+      ansible.builtin.fail:
+        msg: "Wazuh config test failed. Aborting. Error: {{ config_test.stderr }}"
+      when: not (is_local_mock | bool) and config_test.rc != 0
+
+    - name: Restart Wazuh manager
+      ansible.builtin.command: "{{ wazuh_bin }}/wazuh-control restart"
+      when: not (is_local_mock | bool) and copy_results.changed
+
+    - name: Wait for Wazuh to come up
+      ansible.builtin.pause:
+        seconds: 10
+      when: not (is_local_mock | bool) and copy_results.changed
+
+    - name: Verify Wazuh is running
+      ansible.builtin.command: "{{ wazuh_bin }}/wazuh-control status"
+      register: wazuh_status
+      failed_when: "'wazuh-analysisd is running' not in wazuh_status.stdout"
+      when: not (is_local_mock | bool) and copy_results.changed

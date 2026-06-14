@@ -1,0 +1,12 @@
+---
+# Wazuh Manager Configuration
+wazuh_rules_dir: /var/ossec/etc/rules
+yara_rules_dir: /opt/yara-rules
+wazuh_bin: /var/ossec/bin
+wazuh_file_owner: root
+wazuh_file_group: wazuh
+wazuh_file_mode: "0640"
+wazuh_dir_mode: "0750"
+
+# Local mock mode — set to true for dev/test environments
+is_local_mock: true

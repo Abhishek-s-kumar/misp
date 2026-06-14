@@ -1,0 +1,29 @@
+[
+  {
+    "rule_type": "yara",
+    "name": "suspicious_powershell.yar",
+    "content": "rule suspicious_powershell {\n    meta:\n        description = \"Detects suspicious PowerShell execution\"\n        author = \"SOC Team\"\n    strings:\n        $cmd = \"powershell.exe\" nocase\n        $enc = \"-encodedcommand\" nocase\n    condition:\n        $cmd and $enc\n}",
+    "event_id": 1001,
+    "event_uuid": "f290b83e-1175-47e2-824c-1e247492c10b",
+    "timestamp": "2026-06-14T09:00:00+00:00",
+    "tags": ["tlp:white"]
+  },
+  {
+    "rule_type": "sigma",
+    "name": "win_susp_powershell.yml",
+    "content": "title: Suspicious PowerShell Encoded Command\nid: 762c2f7b-bb66-417f-ad66-f0803554471f\nstatus: experimental\ndescription: Detects suspicious base64 encoded command execution.\nlogsource:\n    product: windows\n    service: security\ndetection:\n    selection:\n        EventID: 4688\n        CommandLine|contains: '-encodedcommand'\n    condition: selection\nlevel: high",
+    "event_id": 1002,
+    "event_uuid": "3e9b1da9-f81d-44a5-9263-d1f86f99cf2b",
+    "timestamp": "2026-06-14T09:05:00+00:00",
+    "tags": ["tlp:white"]
+  },
+  {
+    "rule_type": "wazuh",
+    "name": "misp_wazuh_rules.xml",
+    "content": "<group name=\"syslog,errors,\">\n  <rule id=\"100201\" level=\"5\">\n    <decoded_as>syslog</decoded_as>\n    <description>MISP-sourced alert: test rule</description>\n  </rule>\n</group>",
+    "event_id": 1003,
+    "event_uuid": "762c2f7b-bb66-417f-ad66-f0803554471f",
+    "timestamp": "2026-06-14T09:10:00+00:00",
+    "tags": ["tlp:white"]
+  }
+]

@@ -1,0 +1,12 @@
+---
+- name: Restore artifacts from target deploy tag
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Checkout IOC files at target tag
+      ansible.builtin.command:
+        cmd: "git checkout tags/{{ rollback_tag }} -- iocs/"
+        chdir: "{{ lookup('env', 'TI_REPO_PATH') | default('/home/kali/Desktop/misp/repository', true) }}"
+
+- name: Re-deploy restored IOC lists
+  import_playbook: deploy_iocs.yml

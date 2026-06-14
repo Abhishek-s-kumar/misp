@@ -1,0 +1,56 @@
+[
+  {
+    "ioc_type": "ip-src",
+    "value": "185.100.87.10",
+    "event_id": 1001,
+    "event_uuid": "f290b83e-1175-47e2-824c-1e247492c10b",
+    "timestamp": "2026-06-14T09:00:00+00:00",
+    "tags": ["tlp:white", "misp:type=\"malicious\""],
+    "to_ids": true
+  },
+  {
+    "ioc_type": "ip-dst",
+    "value": "10.0.0.5",
+    "event_id": 1002,
+    "event_uuid": "3e9b1da9-f81d-44a5-9263-d1f86f99cf2b",
+    "timestamp": "2026-06-14T09:05:00+00:00",
+    "tags": ["tlp:white"],
+    "to_ids": true
+  },
+  {
+    "ioc_type": "domain",
+    "value": "evil-domain.ru",
+    "event_id": 1003,
+    "event_uuid": "762c2f7b-bb66-417f-ad66-f0803554471f",
+    "timestamp": "2026-06-14T09:10:00+00:00",
+    "tags": ["tlp:white"],
+    "to_ids": true
+  },
+  {
+    "ioc_type": "md5",
+    "value": "d41d8cd98f00b204e9800998ecf8427e",
+    "event_id": 1004,
+    "event_uuid": "88bb8d2e-33ef-4b44-93e1-512c0199cf8a",
+    "timestamp": "2026-06-14T09:15:00+00:00",
+    "tags": ["tlp:white"],
+    "to_ids": true
+  },
+  {
+    "ioc_type": "sha256",
+    "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "event_id": 1005,
+    "event_uuid": "99bb9d3e-44ef-4b55-93e2-512c0299cf8b",
+    "timestamp": "2026-06-14T09:20:00+00:00",
+    "tags": ["tlp:white"],
+    "to_ids": true
+  },
+  {
+    "ioc_type": "url",
+    "value": "http://evil.com/payload.exe",
+    "event_id": 1006,
+    "event_uuid": "aabbccdd-eeff-1122-3344-556677889900",
+    "timestamp": "2026-06-14T09:25:00+00:00",
+    "tags": ["tlp:white"],
+    "to_ids": true
+  }
+]
