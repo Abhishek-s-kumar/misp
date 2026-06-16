@@ -1,0 +1,17 @@
+
+# Ignore the following files
+
+client.keys
+internal_options.conf
+local_internal_options.conf
+ossec.conf
+sslmanager.cert
+localtime
+sslmanager.key
+
+# Ignore the following directories
+
+lists/
+rootcheck/
+shared/
+
