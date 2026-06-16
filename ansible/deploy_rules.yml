@@ -41,10 +41,10 @@
         msg: "Baseline wazuh configuration test failed before deployment. Aborting."
       when: not (is_local_mock | bool) and baseline_check.rc != 0
 
-    - name: Sync Wazuh XML rules to managers
+    - name: Sync compiled Wazuh rules file to managers
       copy:
-        src: ../repository/rules/approved/wazuh/
-        dest: "{{ target_rules_dir }}/"
+        src: ../repository/generated/local_rules.xml
+        dest: "{{ target_rules_dir }}/local_rules.xml"
         owner: "{{ omit if (is_local_mock | bool) else wazuh_file_owner }}"
         group: "{{ omit if (is_local_mock | bool) else wazuh_file_group }}"
         mode: "{{ wazuh_file_mode }}"
@@ -52,7 +52,7 @@
 
     - name: Sync YARA rules to managers
       copy:
-        src: ../repository/rules/approved/yara/
+        src: ../repository/rules/yara/
         dest: "{{ target_yara_dir }}/"
         owner: "{{ omit if (is_local_mock | bool) else wazuh_file_owner }}"
         group: "{{ omit if (is_local_mock | bool) else wazuh_file_group }}"
@@ -78,15 +78,15 @@
 
         - name: Redeploy last known good Wazuh rules
           copy:
-            src: ../repository/rules/approved/wazuh/
-            dest: "{{ target_rules_dir }}/"
+            src: ../repository/generated/local_rules.xml
+            dest: "{{ target_rules_dir }}/local_rules.xml"
             owner: "{{ omit if (is_local_mock | bool) else wazuh_file_owner }}"
             group: "{{ omit if (is_local_mock | bool) else wazuh_file_group }}"
             mode: "{{ wazuh_file_mode }}"
 
         - name: Redeploy last known good YARA rules
           copy:
-            src: ../repository/rules/approved/yara/
+            src: ../repository/rules/yara/
             dest: "{{ target_yara_dir }}/"
             owner: "{{ omit if (is_local_mock | bool) else wazuh_file_owner }}"
             group: "{{ omit if (is_local_mock | bool) else wazuh_file_group }}"

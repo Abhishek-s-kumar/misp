@@ -15,10 +15,15 @@ from typing import Dict, List, Any
 import structlog
 
 from collector.base import RawRule
-from processors.deduplicator import compute_hash, is_duplicate, load_existing_hashes
+from processors.deduplicator import compute_hash, compute_rule_hash, is_duplicate, load_existing_hashes
 from processors.metadata_writer import write_rule_metadata
-from processors.sigma_converter import convert_sigma_to_wazuh
 from validators import RuleValidator, ValidationResult
+from processors.xml_merger import (
+    get_all_used_ids,
+    get_or_assign_sigma_id,
+    get_or_assign_wazuh_ids,
+    rebuild_local_rules,
+)
 
 log = structlog.get_logger()
 
@@ -34,32 +39,33 @@ def process_pending_rules(
 
     1. Validate each rule.
     2. Skip duplicates.
-    3. Convert Sigma rules to Wazuh XML.
-    4. Write approved rules and metadata.
+    3. Write approved rules to approved/ (source) folders.
+    4. Allocate/persist IDs for Sigma & Wazuh source rules.
+    5. Write metadata.
+    6. Rebuild generated/local_rules.xml.
 
     Args:
         rules: List of RawRule objects from the collector.
-        rules_dir: Path to repository/rules/ (contains pending/, approved/, metadata/).
+        rules_dir: Path to repository/rules/ (contains sigma/, yara/, wazuh/).
 
     Returns:
         Summary dict with counts for approved, rejected, duplicated, converted rules.
     """
-    pending_dir = rules_dir / "pending"
-    approved_dir = rules_dir / "approved"
-    metadata_dir = rules_dir / "metadata"
+    pending_dir = rules_dir.parent / "generated" / "pending"
+    approved_dir = rules_dir
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
 
     # Ensure directories exist
-    for d in [
-        pending_dir,
-        approved_dir / "yara",
-        approved_dir / "sigma",
-        approved_dir / "wazuh",
-        metadata_dir,
-    ]:
-        d.mkdir(parents=True, exist_ok=True)
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    (approved_dir / "yara").mkdir(parents=True, exist_ok=True)
+    (approved_dir / "sigma").mkdir(parents=True, exist_ok=True)
+    (approved_dir / "wazuh").mkdir(parents=True, exist_ok=True)
+    (rules_dir.parent / "generated" / "conversion_cache").mkdir(parents=True, exist_ok=True)
 
     validator = RuleValidator()
     existing_hashes = load_existing_hashes(approved_dir)
+    used_ids = get_all_used_ids(rules_dir)
 
     stats = {
         "total": len(rules),
@@ -100,30 +106,25 @@ def process_pending_rules(
             continue
 
         # Step 2: Deduplicate
-        content_hash = compute_hash(rule.content)
-        if is_duplicate(rule.content, existing_hashes):
+        content_hash = compute_rule_hash(rule.rule_type, rule.content)
+        if is_duplicate(rule.rule_type, rule.content, existing_hashes):
             log.info("rule_duplicate_skipped", name=rule.name)
             stats["duplicated"] += 1
             continue
 
-        # Step 3: Sigma → Wazuh conversion
+        # Step 3: Write to approved source directory & Assign IDs
         converted = False
         conversion_target = None
-        if rule.rule_type == "sigma":
-            wazuh_xml = convert_sigma_to_wazuh(rule.content, rule.name)
-            if wazuh_xml:
-                converted_name = rule.name.rsplit(".", 1)[0] + ".xml"
-                dest = approved_dir / "wazuh" / converted_name
-                dest.write_text(wazuh_xml, encoding="utf-8")
-                existing_hashes.add(compute_hash(wazuh_xml))
-                converted = True
-                conversion_target = "wazuh"
-                stats["converted"] += 1
-                log.info("sigma_converted_to_wazuh", name=converted_name)
 
-            # Also store the original Sigma YAML for audit
-            sigma_dest = approved_dir / "sigma" / rule.name
-            sigma_dest.write_text(rule.content, encoding="utf-8")
+        if rule.rule_type == "sigma":
+            dest = approved_dir / "sigma" / rule.name
+            dest.write_text(rule.content, encoding="utf-8")
+            # Persist and get ID in the source file
+            get_or_assign_sigma_id(dest, used_ids)
+            converted = True
+            conversion_target = "wazuh"
+            stats["converted"] += 1
+            log.info("sigma_approved_and_id_assigned", name=rule.name)
 
         elif rule.rule_type == "yara":
             dest = approved_dir / "yara" / rule.name
@@ -132,9 +133,12 @@ def process_pending_rules(
         elif rule.rule_type == "wazuh":
             dest = approved_dir / "wazuh" / rule.name
             dest.write_text(rule.content, encoding="utf-8")
+            # Assign rules IDs in the source file
+            get_or_assign_wazuh_ids(dest, used_ids)
 
         # Track hash to prevent future duplicates within same batch
         existing_hashes.add(content_hash)
+        stats["approved"] += 1
 
         # Step 4: Write metadata
         write_rule_metadata(
@@ -149,7 +153,7 @@ def process_pending_rules(
             content_hash=content_hash,
         )
 
-        stats["approved"] += 1
-        log.info("rule_approved", name=rule.name, type=rule.rule_type)
+    # Rebuild all rules into generated/local_rules.xml
+    rebuild_local_rules(rules_dir)
 
     return stats

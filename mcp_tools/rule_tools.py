@@ -12,6 +12,7 @@ from collector.base import RawRule
 from collector.misp_rules import get_rule_provider, MISPRuleCollector
 from validators import RuleValidator
 from processors import process_pending_rules
+from processors.git_ops import commit_and_push_to_dev, get_or_create_pr
 
 log = structlog.get_logger()
 
@@ -24,6 +25,7 @@ class SyncResult:
     duplicated: int
     converted: int
     commit_sha: str
+    pr_url: str = ""
 
 @dataclass
 class RuleValidationDetail:
@@ -78,7 +80,14 @@ def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
     repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
     repo_dir = Path(repo_path)
     state_file = repo_dir / ".sync_state.json"
-    rules_dir = repo_dir / "rules"
+
+    dac_repo_path_str = os.getenv("DAC_REPO_PATH", "")
+    separate_dac_repo = bool(dac_repo_path_str) and Path(dac_repo_path_str) != repo_dir
+
+    if separate_dac_repo:
+        rules_dir = Path(dac_repo_path_str) / "rules"
+    else:
+        rules_dir = repo_dir / "rules"
 
     provider = get_rule_provider()
     collector = MISPRuleCollector(provider, state_file)
@@ -117,37 +126,76 @@ def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
     # Process rules (validation, deduplication, conversion, state promotion, metadata)
     stats = process_pending_rules(raw_rules, rules_dir=rules_dir)
 
-    # Git commit
-    repo = Repo(repo_dir)
-    repo.git.checkout("main")
-    
-    # Track the sync state file and rules directory changes safely
-    files_to_add = []
-    if rules_dir.exists():
-        files_to_add.append("rules/")
-    if state_file.exists():
-        files_to_add.append(".sync_state.json")
-        
-    if files_to_add:
-        repo.git.add(files_to_add)
+    commit_msg = (
+        f"sync: rules [{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}] "
+        f"pulled={stats['total']} approved={stats['approved']} converted={stats['converted']}"
+    )
 
+    commit_sha = ""
+    pr_url = ""
 
-    if repo.is_dirty(untracked_files=True) or len(repo.index.diff("HEAD")) > 0:
-        commit_msg = (
-            f"sync: rules [{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}] "
-            f"pulled={stats['total']} approved={stats['approved']} converted={stats['converted']}"
-        )
-        commit = repo.index.commit(commit_msg)
-        commit_sha = commit.hexsha
+    if separate_dac_repo:
+        # ── Two-repo mode ──────────────────────────────────────────────────────
+        # Push to the DaC repo's dev branch, then open / reuse a PR.
+        dac_repo_path = Path(dac_repo_path_str)
+        commit_sha = commit_and_push_to_dev(dac_repo_path, commit_msg) or ""
+
+        # Also commit the pipeline repo's state file on main
         try:
-            if repo.remotes:
-                repo.remotes.origin.push("main")
+            repo = Repo(repo_dir)
+            repo.git.checkout("main")
+            if state_file.exists():
+                repo.git.add([".sync_state.json"])
+            if repo.is_dirty(untracked_files=False):
+                pipeline_commit = repo.index.commit(f"state: {commit_msg}")
+                commit_sha = commit_sha or pipeline_commit.hexsha
+                if repo.remotes:
+                    repo.remotes.origin.push("main")
         except Exception as e:
-            log.warning("git_push_rules_failed", error=str(e))
-        status = "committed"
+            log.warning("git_push_pipeline_state_failed", error=str(e))
+
+        # Open or reuse the DaC PR (best-effort; gh CLI may be absent in CI)
+        if commit_sha:
+            pr_result = get_or_create_pr(
+                dac_repo_path,
+                pr_title=f"sync: MISP rules update [{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}]",
+                pr_body=(
+                    f"Automated MISP rules synchronization.\n\n"
+                    f"- Rules pulled: {stats['total']}\n"
+                    f"- Approved: {stats['approved']}\n"
+                    f"- Converted: {stats['converted']}\n"
+                    f"- Rejected: {stats['rejected']}\n"
+                ),
+            )
+            pr_url = pr_result.get("url") or ""
+            log.info("pr_status", action=pr_result.get("action"), pr_url=pr_url)
+
     else:
-        commit_sha = repo.head.commit.hexsha
-        status = "no_changes"
+        # ── Single-repo mode (default / tests) ────────────────────────────────
+        # Commit rules/ and generated/ directly to main, no PR created.
+        repo = Repo(repo_dir)
+        repo.git.checkout("main")
+        files_to_add = []
+        if rules_dir.exists():
+            files_to_add.append("rules/")
+        generated_dir = repo_dir / "generated"
+        if generated_dir.exists():
+            files_to_add.append("generated/")
+        if state_file.exists():
+            files_to_add.append(".sync_state.json")
+        if files_to_add:
+            repo.git.add(files_to_add)
+        if repo.is_dirty(untracked_files=True) or len(repo.index.diff("HEAD")) > 0:
+            commit = repo.index.commit(commit_msg)
+            commit_sha = commit.hexsha
+            try:
+                if repo.remotes:
+                    repo.remotes.origin.push("main")
+            except Exception as e:
+                log.warning("git_push_rules_failed", error=str(e))
+
+    status = "committed" if commit_sha else "no_changes"
+
 
     return SyncResult(
         status=status,
@@ -156,7 +204,8 @@ def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
         rejected=stats["rejected"],
         duplicated=stats["duplicated"],
         converted=stats["converted"],
-        commit_sha=commit_sha
+        commit_sha=commit_sha,
+        pr_url=pr_url,
     )
 
 
@@ -227,16 +276,16 @@ def deploy_rules(dry_run: bool = False) -> DeployResult:
     Deploy validated rules to Wazuh managers via Ansible.
     """
     repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
-    approved_dir = Path(repo_path) / "rules" / "approved"
+    rules_dir = Path(repo_path) / "rules"
 
-    # Safeguard: Check if approved/wazuh and approved/yara are empty
-    wazuh_rules_count = count_files_in_dir(approved_dir / "wazuh")
-    yara_rules_count = count_files_in_dir(approved_dir / "yara")
+    # Safeguard: Check if rules/wazuh and rules/yara are empty
+    wazuh_rules_count = count_files_in_dir(rules_dir / "wazuh")
+    yara_rules_count = count_files_in_dir(rules_dir / "yara")
 
     if wazuh_rules_count == 0 and yara_rules_count == 0:
-        log.warning("deploy_blocked_empty_approved_rules")
+        log.warning("deploy_blocked_empty_rules")
         return DeployResult(
-            status="aborted: empty approved rules",
+            status="aborted: no rules to deploy",
             hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
         )
 
@@ -287,7 +336,7 @@ def deploy_rules(dry_run: bool = False) -> DeployResult:
         deploy_tag = f"deploy-rules-{timestamp_str}"
 
         # Write deployment manifest
-        manifests_dir = Path(repo_path) / "rules" / "manifests"
+        manifests_dir = Path(repo_path) / "generated" / "manifests"
         manifests_dir.mkdir(parents=True, exist_ok=True)
         manifest_file = manifests_dir / f"{deploy_tag}.json"
 
@@ -306,7 +355,7 @@ def deploy_rules(dry_run: bool = False) -> DeployResult:
         manifest_file.write_text(json.dumps(tag_metadata, indent=2), encoding="utf-8")
 
         # Add manifest to Git repository
-        repo.git.add(f"rules/manifests/{deploy_tag}.json")
+        repo.git.add(f"generated/manifests/{deploy_tag}.json")
         repo.index.commit(f"manifest: record rule deployment {deploy_tag}")
         
         # Re-get the commit hash for the tag
@@ -345,13 +394,21 @@ def rollback_rules(tag: str) -> RollbackResult:
 
     try:
         repo.git.checkout("main")
-        
-        # Revert rules directory from the tag
+
+        # Revert rules and generated/ directories from the tag
         repo.git.checkout(tag, "--", "rules/")
-        
+        try:
+            repo.git.checkout(tag, "--", "generated/")
+        except Exception:
+            pass  # generated/ may not exist in older tags
+
         # Commit the reverted files to main
         commit_msg = f"rollback: rules reverted to tag {tag}"
         repo.index.add(["rules/"])
+        try:
+            repo.index.add(["generated/"])
+        except Exception:
+            pass
         commit = repo.index.commit(commit_msg)
         commit_sha = commit.hexsha
 

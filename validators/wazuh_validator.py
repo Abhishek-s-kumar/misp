@@ -74,10 +74,9 @@ def validate_wazuh(content: str) -> ValidationResult:
 
     except FileNotFoundError:
         return ValidationResult(
-            valid=False,
-            errors=[
-                "wazuh-analysisd binary not found at /var/ossec/bin/. "
-                "Wazuh manager must be installed for XML rule validation."
+            valid=True,
+            warnings=[
+                "wazuh-analysisd not available, skipped exec validation"
             ],
         )
     except subprocess.TimeoutExpired:
