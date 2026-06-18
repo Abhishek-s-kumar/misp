@@ -1,0 +1,12 @@
+custom:
+  wazuh_rule_id: 100000
+detection:
+  condition: selection
+  selection:
+    EventID: 4688
+id: 762c2f7b-bb66-417f-ad66-f0803554471f
+level: high
+logsource:
+  product: windows
+status: experimental
+title: Test Sigma Rule

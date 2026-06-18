@@ -9,4 +9,4 @@ wazuh_file_mode: "0640"
 wazuh_dir_mode: "0750"
 
 # Local mock mode — set to true for dev/test environments
-is_local_mock: true
+is_local_mock: false

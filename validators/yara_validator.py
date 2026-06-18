@@ -3,11 +3,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
-
 import structlog
 
 log = structlog.get_logger()
-
 
 @dataclass
 class ValidationResult:
@@ -15,12 +13,7 @@ class ValidationResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
-
 def validate_yara(content: str) -> ValidationResult:
-    """
-    Validate a YARA rule by writing it to a tempfile and running yara -C.
-    Returns ValidationResult. Never raises.
-    """
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -29,26 +22,29 @@ def validate_yara(content: str) -> ValidationResult:
             tmp.write(content)
             tmp_path = Path(tmp.name)
 
+        # Create a dummy file to scan against
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False
+        ) as dummy:
+            dummy.write("dummy")
+            dummy_path = Path(dummy.name)
+
+        # yara <rules> <target> — if syntax is bad, it exits non-zero
+        # -p 0 = no external variables needed
         result = subprocess.run(
-            ["yara", "-C", str(tmp_path)],
+            ["yara", "-p", "0", str(tmp_path), str(dummy_path)],
             capture_output=True,
             text=True,
             timeout=30,
         )
 
+        dummy_path.unlink(missing_ok=True)
+
         if result.returncode == 0:
-            warnings = [
-                line
-                for line in result.stderr.strip().splitlines()
-                if line.strip()
-            ]
+            warnings = [line for line in result.stderr.strip().splitlines() if line.strip()]
             return ValidationResult(valid=True, warnings=warnings)
         else:
-            errors = [
-                line
-                for line in result.stderr.strip().splitlines()
-                if line.strip()
-            ]
+            errors = [line for line in result.stderr.strip().splitlines() if line.strip()]
             return ValidationResult(valid=False, errors=errors)
 
     except FileNotFoundError:
