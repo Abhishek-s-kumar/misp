@@ -1,5 +1,5 @@
 custom:
-  wazuh_rule_id: 100000
+  wazuh_rule_id: 200000
 detection:
   condition: selection
   selection:

@@ -1,5 +1,5 @@
 <group name="sigma,misp,">
-  <rule id="100294" level="10">
+  <rule id="100249" level="10">
     <description>Test Sigma Rule [Sigma converted]</description>
   </rule>
 </group>

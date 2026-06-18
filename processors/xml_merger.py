@@ -12,12 +12,12 @@ log = structlog.get_logger()
 
 
 def next_available_id(used_ids: Set[int]) -> int:
-    """Find the next available rule ID in the MISP range 100000-199999."""
-    for rid in range(100000, 200000):
+    """Find the next available rule ID in the MISP range 200000-299999."""
+    for rid in range(200000, 300000):
         if rid not in used_ids:
             used_ids.add(rid)
             return rid
-    raise ValueError("Rule ID range 100000-199999 is exhausted.")
+    raise ValueError("Rule ID range 200000-299999 is exhausted.")
 
 
 def get_all_used_ids(rules_dir: Path) -> Set[int]:
@@ -101,7 +101,7 @@ def get_or_assign_sigma_id(file_path: Path, used_ids: Set[int]) -> int:
 
 
 def get_or_assign_wazuh_ids(file_path: Path, used_ids: Set[int]) -> bool:
-    """Scan and assign/fix rule IDs in a Wazuh XML rule file, keeping them in the 100000-199999 range."""
+    """Scan and assign/fix rule IDs in a Wazuh XML rule file, keeping them in the 200000-299999 range."""
     try:
         content = file_path.read_text(encoding="utf-8")
         # Ensure it has a root element to parse properly

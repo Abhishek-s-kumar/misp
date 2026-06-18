@@ -1,0 +1,53 @@
+---
+- name: Deploy Detection Rules to Wazuh Docker
+  hosts: wazuh_managers
+  serial: 1
+  vars:
+    wazuh_docker_dir: "~/wazuh-docker/multi-node"
+    wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
+    wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
+    container_name: "multi-node-wazuh.master-1"
+
+  tasks:
+    - name: Ensure rules directory exists on host
+      file:
+        path: "{{ wazuh_rules_host_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure YARA directory exists on host
+      file:
+        path: "{{ wazuh_yara_host_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Sync compiled Wazuh rules to host volume
+      copy:
+        src: ../repository/generated/local_rules.xml
+        dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
+        mode: "0644"
+      register: copy_wazuh_rules
+
+    - name: Sync YARA rules to host volume
+      copy:
+        src: ../repository/rules/yara/
+        dest: "{{ wazuh_yara_host_dir }}/"
+        mode: "0644"
+      register: copy_yara_rules
+
+    - name: Restart Wazuh master container
+      command: "docker restart {{ container_name }}"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+
+    - name: Verify container is running after restart
+      command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
+      register: container_status
+      retries: 5
+      delay: 10
+      until: "'Up' in container_status.stdout"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+
+    - name: Show container status
+      debug:
+        msg: "Wazuh master container status: {{ container_status.stdout }}"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
