@@ -56,6 +56,13 @@ def e2e_rules_env(tmp_path, monkeypatch):
     # Copy ansible folder to tmp_path
     shutil.copytree("/home/kali/Desktop/misp/ansible", tmp_path / "ansible")
 
+    # Override inventory to use localhost with local connection to avoid SSH timeouts
+    inventory_path = tmp_path / "ansible" / "inventory.ini"
+    inventory_path.write_text(
+        "[wazuh_managers]\nwazuh-mgr-1 ansible_host=localhost ansible_connection=local\n",
+        encoding="utf-8"
+    )
+
     # Create fixtures/mock_rules.json with a valid YARA and Sigma rule
     temp_fixture = tmp_path / "fixtures" / "mock_rules.json"
     temp_fixture.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +134,7 @@ def test_sync_rules_commits_to_main(e2e_rules_env):
     sigma_data = yaml.safe_load(sigma_file.read_text())
     assert "custom" in sigma_data
     assert "wazuh_rule_id" in sigma_data["custom"]
-    assert 100000 <= sigma_data["custom"]["wazuh_rule_id"] <= 199999
+    assert 200000 <= sigma_data["custom"]["wazuh_rule_id"] <= 299999
 
     # Verify generated/local_rules.xml was created
     local_rules = repo_path / "generated" / "local_rules.xml"

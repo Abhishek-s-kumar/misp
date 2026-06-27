@@ -13,3 +13,5 @@ pytest>=7.0.0
 pytest-asyncio>=0.21.0
 ruff>=0.1.0
 sigma-cli>=0.10.0
+fastapi>=0.110.0
+uvicorn>=0.29.0

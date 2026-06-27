@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -15,6 +16,21 @@ from processors import process_pending_rules
 from processors.git_ops import commit_and_push_to_dev, get_or_create_pr
 
 log = structlog.get_logger()
+
+def _write_dynamic_inventory(host: str, ip: str, user: str, key_path: str) -> str:
+    """Write a temp inventory file for one host. Returns path."""
+    content = f"""[wazuh_managers]
+{host} ansible_host={ip} ansible_user={user}
+
+[wazuh_managers:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_private_key_file={key_path}
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+"""
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False)
+    tmp.write(content)
+    tmp.close()
+    return tmp.name
 
 @dataclass
 class SyncResult:
@@ -73,7 +89,10 @@ def count_files_in_dir(directory: Path, glob_pattern: str = "*") -> int:
     return sum(1 for f in directory.glob(glob_pattern) if f.is_file() and not f.name.startswith("."))
 
 
-def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
+def sync_misp_rules(
+    since: Optional[str] = None,
+    misp_provider: str = "",
+) -> SyncResult:
     """
     Pull latest detection rules from MISP, validate, process, and commit to main.
     """
@@ -89,7 +108,7 @@ def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
     else:
         rules_dir = repo_dir / "rules"
 
-    provider = get_rule_provider()
+    provider = get_rule_provider(provider_override=misp_provider)
     collector = MISPRuleCollector(provider, state_file)
 
     log.info("sync_misp_rules_started", since=since)
@@ -271,7 +290,13 @@ def validate_rules(rule_dir: str) -> ValidationReport:
     )
 
 
-def deploy_rules(dry_run: bool = False) -> DeployResult:
+def deploy_rules(
+    dry_run: bool = False,
+    host_name: str = "",
+    host_ip: str = "",
+    ssh_user: str = "",
+    ssh_key_path: str = "",
+) -> DeployResult:
     """
     Deploy validated rules to Wazuh managers via Ansible.
     """
@@ -289,101 +314,121 @@ def deploy_rules(dry_run: bool = False) -> DeployResult:
             hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
         )
 
-    inventory = os.getenv("ANSIBLE_INVENTORY", "ansible/inventory.ini")
-    vault_pass_file = os.getenv("ANSIBLE_VAULT_PASSWORD_FILE", "ansible/.vault_pass")
-    is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
+    inventory = ""
+    is_dynamic = False
+    try:
+        if host_name and host_ip and ssh_key_path:
+            inventory = _write_dynamic_inventory(host_name, host_ip, ssh_user or "root", ssh_key_path)
+            is_dynamic = True
+        else:
+            inventory = os.getenv("ANSIBLE_INVENTORY", "ansible/inventory.ini")
 
-    cmd = [
-        "ansible-playbook",
-        "ansible/deploy_rules.yml",
-        "-i", inventory
-    ]
+        vault_pass_file = os.getenv("ANSIBLE_VAULT_PASSWORD_FILE", "ansible/.vault_pass")
+        is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
 
-    if is_local_mock:
-        cmd.extend(["-e", "is_local_mock=true"])
-    else:
-        if Path(vault_pass_file).exists():
-            cmd.extend(["--vault-password-file", vault_pass_file])
+        cmd = [
+            "ansible-playbook",
+            "ansible/deploy_rules.yml",
+            "-i", inventory
+        ]
 
-    if dry_run:
-        cmd.append("--check")
+        if is_local_mock:
+            cmd.extend(["-e", "is_local_mock=true"])
+        else:
+            if Path(vault_pass_file).exists():
+                cmd.extend(["--vault-password-file", vault_pass_file])
 
-    log.info("running_ansible_rules_deployment", command=" ".join(cmd), dry_run=dry_run)
-    workspace_root = str(Path(repo_path).parent)
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=workspace_root)
+        if dry_run:
+            cmd.append("--check")
 
-    if result.returncode != 0:
-        log.error("ansible_rules_deployment_failed", stdout=result.stdout, stderr=result.stderr)
+        log.info("running_ansible_rules_deployment", command=" ".join(cmd), dry_run=dry_run)
+        workspace_root = str(Path(repo_path).parent)
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=workspace_root)
+
+        if result.returncode != 0:
+            log.error("ansible_rules_deployment_failed", stdout=result.stdout, stderr=result.stderr)
+            return DeployResult(
+                status="failed",
+                hosts_succeeded=[],
+                hosts_failed=["all"],
+                deploy_tag="",
+                deploy_metadata={"stdout": result.stdout, "stderr": result.stderr},
+                dry_run=dry_run
+            )
+
+        log.info("ansible_rules_deployment_succeeded")
+
+        deploy_tag = ""
+        tag_metadata = {}
+
+        if not dry_run:
+            repo = Repo(repo_path)
+            repo.git.checkout("main")
+            main_commit = repo.head.commit.hexsha
+            timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            deploy_tag = f"deploy-rules-{timestamp_str}"
+
+            # Write deployment manifest
+            manifests_dir = Path(repo_path) / "generated" / "manifests"
+            manifests_dir.mkdir(parents=True, exist_ok=True)
+            manifest_file = manifests_dir / f"{deploy_tag}.json"
+
+            tag_metadata = {
+                "type": "deploy",
+                "scope": "rules",
+                "commit": main_commit,
+                "rule_counts": {
+                    "wazuh_xml": wazuh_rules_count,
+                    "yara": yara_rules_count
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "operator": "mcp"
+            }
+
+            manifest_file.write_text(json.dumps(tag_metadata, indent=2), encoding="utf-8")
+
+            # Add manifest to Git repository
+            repo.git.add(f"generated/manifests/{deploy_tag}.json")
+            repo.index.commit(f"manifest: record rule deployment {deploy_tag}")
+            
+            # Re-get the commit hash for the tag
+            main_commit = repo.head.commit.hexsha
+            tag_metadata["commit"] = main_commit
+
+            try:
+                repo.create_tag(deploy_tag, message=json.dumps(tag_metadata))
+                if repo.remotes:
+                    try:
+                        repo.remotes.origin.push("main")
+                        repo.remotes.origin.push(deploy_tag)
+                    except Exception as e:
+                        log.warning("git_push_rules_tag_failed", error=str(e))
+            except Exception as e:
+                log.error("git_rules_tag_creation_failed", error=str(e))
+
         return DeployResult(
-            status="failed",
-            hosts_succeeded=[],
-            hosts_failed=["all"],
-            deploy_tag="",
-            deploy_metadata={"stdout": result.stdout, "stderr": result.stderr},
+            status="ok",
+            hosts_succeeded=["all"],
+            hosts_failed=[],
+            deploy_tag=deploy_tag,
+            deploy_metadata=tag_metadata,
             dry_run=dry_run
         )
-
-    log.info("ansible_rules_deployment_succeeded")
-
-    deploy_tag = ""
-    tag_metadata = {}
-
-    if not dry_run:
-        repo = Repo(repo_path)
-        repo.git.checkout("main")
-        main_commit = repo.head.commit.hexsha
-        timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        deploy_tag = f"deploy-rules-{timestamp_str}"
-
-        # Write deployment manifest
-        manifests_dir = Path(repo_path) / "generated" / "manifests"
-        manifests_dir.mkdir(parents=True, exist_ok=True)
-        manifest_file = manifests_dir / f"{deploy_tag}.json"
-
-        tag_metadata = {
-            "type": "deploy",
-            "scope": "rules",
-            "commit": main_commit,
-            "rule_counts": {
-                "wazuh_xml": wazuh_rules_count,
-                "yara": yara_rules_count
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "operator": "mcp"
-        }
-
-        manifest_file.write_text(json.dumps(tag_metadata, indent=2), encoding="utf-8")
-
-        # Add manifest to Git repository
-        repo.git.add(f"generated/manifests/{deploy_tag}.json")
-        repo.index.commit(f"manifest: record rule deployment {deploy_tag}")
-        
-        # Re-get the commit hash for the tag
-        main_commit = repo.head.commit.hexsha
-        tag_metadata["commit"] = main_commit
-
-        try:
-            repo.create_tag(deploy_tag, message=json.dumps(tag_metadata))
-            if repo.remotes:
-                try:
-                    repo.remotes.origin.push("main")
-                    repo.remotes.origin.push(deploy_tag)
-                except Exception as e:
-                    log.warning("git_push_rules_tag_failed", error=str(e))
-        except Exception as e:
-            log.error("git_rules_tag_creation_failed", error=str(e))
-
-    return DeployResult(
-        status="ok",
-        hosts_succeeded=["all"],
-        hosts_failed=[],
-        deploy_tag=deploy_tag,
-        deploy_metadata=tag_metadata,
-        dry_run=dry_run
-    )
+    finally:
+        if is_dynamic and inventory and os.path.exists(inventory):
+            try:
+                os.unlink(inventory)
+            except Exception as e:
+                log.warning("failed_to_delete_temp_inventory", path=inventory, error=str(e))
 
 
-def rollback_rules(tag: str) -> RollbackResult:
+def rollback_rules(
+    tag: str,
+    host_name: str = "",
+    host_ip: str = "",
+    ssh_user: str = "",
+    ssh_key_path: str = "",
+) -> RollbackResult:
     """
     Rollback approved rules to a previous deployment tag.
     """
@@ -419,7 +464,13 @@ def rollback_rules(tag: str) -> RollbackResult:
                 log.warning("git_push_rollback_failed", error=str(e))
 
         # Deploy the reverted rules
-        deploy_res = deploy_rules(dry_run=False)
+        deploy_res = deploy_rules(
+            dry_run=False,
+            host_name=host_name,
+            host_ip=host_ip,
+            ssh_user=ssh_user,
+            ssh_key_path=ssh_key_path,
+        )
         revert_success = deploy_res.status == "ok"
 
         return RollbackResult(
@@ -439,52 +490,72 @@ def rollback_rules(tag: str) -> RollbackResult:
         )
 
 
-def rule_status(manager_host: str) -> StatusReport:
+def rule_status(
+    manager_host: str,
+    host_ip: str = "",
+    ssh_user: str = "",
+    ssh_key_path: str = "",
+) -> StatusReport:
     """
     Check the rules status of a given manager.
     """
     repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
     repo = Repo(repo_path)
 
-    # Retrieve last deployment tag
-    last_deployment_tag = ""
+    inventory = ""
+    is_dynamic = False
     try:
-        tags = sorted(repo.tags, key=lambda t: t.commit.committed_datetime)
-        rule_tags = [t for t in tags if t.name.startswith("deploy-rules-")]
-        if rule_tags:
-            last_deployment_tag = rule_tags[-1].name
-    except Exception as e:
-        log.warning("get_last_tag_failed", error=str(e))
+        if manager_host and host_ip and ssh_key_path:
+            inventory = _write_dynamic_inventory(manager_host, host_ip, ssh_user or "root", ssh_key_path)
+            is_dynamic = True
+        else:
+            inventory = os.getenv("ANSIBLE_INVENTORY", "ansible/inventory.ini")
 
-    is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
-
-    wazuh_rules_count = 0
-    yara_rules_count = 0
-    wazuh_running = False
-
-    if is_local_mock:
-        mock_wazuh_dir = Path(repo_path).parent / "mock_wazuh"
-        wazuh_rules_count = count_files_in_dir(mock_wazuh_dir / "etc" / "rules")
-        yara_rules_count = count_files_in_dir(mock_wazuh_dir / "opt" / "yara-rules")
-        wazuh_running = True
-    else:
-        # Run local wazuh-control check or remotely via SSH if config supports it
+        # Retrieve last deployment tag
+        last_deployment_tag = ""
         try:
-            status_res = subprocess.run(
-                ["/var/ossec/bin/wazuh-control", "status"],
-                capture_output=True, text=True, timeout=10
-            )
-            wazuh_running = status_res.returncode == 0
-        except Exception:
-            wazuh_running = False
+            tags = sorted(repo.tags, key=lambda t: t.commit.committed_datetime)
+            rule_tags = [t for t in tags if t.name.startswith("deploy-rules-")]
+            if rule_tags:
+                last_deployment_tag = rule_tags[-1].name
+        except Exception as e:
+            log.warning("get_last_tag_failed", error=str(e))
 
-        wazuh_rules_count = count_files_in_dir(Path("/var/ossec/etc/rules"))
-        yara_rules_count = count_files_in_dir(Path("/opt/yara-rules"))
+        is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
 
-    return StatusReport(
-        manager_host=manager_host,
-        wazuh_running=wazuh_running,
-        yara_rules_count=yara_rules_count,
-        wazuh_rules_count=wazuh_rules_count,
-        last_deployment_tag=last_deployment_tag
-    )
+        wazuh_rules_count = 0
+        yara_rules_count = 0
+        wazuh_running = False
+
+        if is_local_mock:
+            mock_wazuh_dir = Path(repo_path).parent / "mock_wazuh"
+            wazuh_rules_count = count_files_in_dir(mock_wazuh_dir / "etc" / "rules")
+            yara_rules_count = count_files_in_dir(mock_wazuh_dir / "opt" / "yara-rules")
+            wazuh_running = True
+        else:
+            # Run local wazuh-control check or remotely via SSH if config supports it
+            try:
+                status_res = subprocess.run(
+                    ["/var/ossec/bin/wazuh-control", "status"],
+                    capture_output=True, text=True, timeout=10
+                )
+                wazuh_running = status_res.returncode == 0
+            except Exception:
+                wazuh_running = False
+
+            wazuh_rules_count = count_files_in_dir(Path("/var/ossec/etc/rules"))
+            yara_rules_count = count_files_in_dir(Path("/opt/yara-rules"))
+
+        return StatusReport(
+            manager_host=manager_host,
+            wazuh_running=wazuh_running,
+            yara_rules_count=yara_rules_count,
+            wazuh_rules_count=wazuh_rules_count,
+            last_deployment_tag=last_deployment_tag
+        )
+    finally:
+        if is_dynamic and inventory and os.path.exists(inventory):
+            try:
+                os.unlink(inventory)
+            except Exception:
+                pass

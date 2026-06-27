@@ -1,0 +1,209 @@
+5 changes needed. Here they are:
+
+---
+
+**1. `mcp_tools/rule_tools.py` — add host params to `deploy_rules`, `rollback_rules`, `rule_status`**
+
+Right now all 3 hardcode `ANSIBLE_INVENTORY` env var = static host. Need dynamic inventory per call.
+
+```python
+# ADD this helper at top of rule_tools.py
+import tempfile
+
+def _write_dynamic_inventory(host: str, ip: str, user: str, key_path: str) -> str:
+"""Write a temp inventory file for one host. Returns path."""
+content = f"""[wazuh_managers]
+{host} ansible_host={ip} ansible_user={user}
+
+[wazuh_managers:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_private_key_file={key_path}
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+"""
+tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".ini", delete=False)
+tmp.write(content)
+tmp.close()
+return tmp.name
+```
+
+Then update `deploy_rules`, `rollback_rules`, `rule_status` signatures:
+
+```python
+# BEFORE
+def deploy_rules(dry_run: bool = False) -> DeployResult:
+...
+inventory = os.getenv("ANSIBLE_INVENTORY", "ansible/inventory.ini")
+
+# AFTER
+def deploy_rules(
+dry_run: bool = False,
+host_name: str = "",
+host_ip: str = "",
+ssh_user: str = "",
+ssh_key_path: str = "",
+) -> DeployResult:
+# use dynamic inventory if params provided, else fall back to env var
+if host_name and host_ip and ssh_key_path:
+inventory = _write_dynamic_inventory(host_name, host_ip, ssh_user or "root", ssh_key_path)
+else:
+inventory = os.getenv("ANSIBLE_INVENTORY", "ansible/inventory.ini")
+...
+```
+
+Same pattern for `rollback_rules` and `rule_status`.
+
+---
+
+**2. `sync_misp_rules` — accept `misp_provider` param**
+
+Right now reads `MISP_PROVIDER` env var only.
+
+```python
+# BEFORE
+def sync_misp_rules(since: Optional[str] = None) -> SyncResult:
+...
+provider = get_rule_provider() # reads env var
+
+# AFTER
+def sync_misp_rules(
+since: Optional[str] = None,
+misp_provider: str = "", # "mock" | "real" | "" (use env var)
+) -> SyncResult:
+if misp_provider:
+os.environ["MISP_PROVIDER"] = misp_provider # override for this call
+provider = get_rule_provider()
+...
+```
+
+---
+
+**3. New file `api/server.py` — thin FastAPI wrapper so dashboard JS can call tools**
+
+Dashboard currently has mock responses. To make calls real, need HTTP server.
+
+```python
+# api/server.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional
+from mcp_tools.rule_tools import sync_misp_rules, validate_rules, deploy_rules, rollback_rules, rule_status
+from dotenv import load_dotenv
+import uvicorn, os
+
+load_dotenv()
+app = FastAPI(title="MISP→Wazuh API")
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+class SyncReq(BaseModel):
+since: Optional[str] = None
+misp_provider: str = "mock"
+
+class ValidateReq(BaseModel):
+rule_dir: str
+
+class DeployReq(BaseModel):
+dry_run: bool = True
+host_name: str = ""
+host_ip: str = ""
+ssh_user: str = ""
+ssh_key_path: str = ""
+
+class RollbackReq(BaseModel):
+tag: str
+host_name: str = ""
+host_ip: str = ""
+ssh_user: str = ""
+ssh_key_path: str = ""
+
+class StatusReq(BaseModel):
+manager_host: str
+host_ip: str = ""
+ssh_user: str = ""
+ssh_key_path: str = ""
+
+@app.post("/sync")
+def api_sync(req: SyncReq):
+r = sync_misp_rules(since=req.since, misp_provider=req.misp_provider)
+return vars(r)
+
+@app.post("/validate")
+def api_validate(req: ValidateReq):
+r = validate_rules(req.rule_dir)
+return vars(r)
+
+@app.post("/deploy")
+def api_deploy(req: DeployReq):
+r = deploy_rules(dry_run=req.dry_run, host_name=req.host_name,
+host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
+return vars(r)
+
+@app.post("/rollback")
+def api_rollback(req: RollbackReq):
+r = rollback_rules(tag=req.tag, host_name=req.host_name,
+host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
+return vars(r)
+
+@app.post("/status")
+def api_status(req: StatusReq):
+r = rule_status(manager_host=req.manager_host)
+return vars(r)
+
+# serve dashboard HTML
+app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
+
+if __name__ == "__main__":
+uvicorn.run(app, host="0.0.0.0", port=8080)
+```
+
+---
+
+**4. Dashboard widget — swap mock calls for real fetch**
+
+In the React dashboard, replace `mock()` call with actual `fetch`:
+
+```js
+// BEFORE (in run())
+const data = mock(toolId, activeHost, { ...opts, misp });
+
+// AFTER
+const endpointMap = {
+sync: { url: "/sync", body: { since: opts.since, misp_provider: misp } },
+validate: { url: "/validate", body: { rule_dir: opts.dir } },
+deploy: { url: "/deploy", body: { dry_run: opts.dryRun, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user:
+activeHost.user, ssh_key_path: activeHost.keyPath } },
+rollback: { url: "/rollback", body: { tag: opts.tag, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user:
+activeHost.user, ssh_key_path: activeHost.keyPath } },
+status: { url: "/status", body: { manager_host: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user,
+ssh_key_path: activeHost.keyPath } },
+};
+const { url, body } = endpointMap[toolId];
+const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body:
+JSON.stringify(body) });
+const data = await res.json();
+```
+
+Save dashboard as `dashboard/index.html`.
+
+---
+
+**5. `requirements.txt` — add 2 deps**
+
+```
+fastapi>=0.110.0
+uvicorn>=0.29.0
+```
+
+---
+
+**Run it:**
+
+```bash
+python api/server.py
+# open http://localhost:8080
+```
+
+MCP server still runs separately via `python mcp_tools/server.py` for Claude/MCP clients. API server is only for
+dashboard.

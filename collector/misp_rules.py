@@ -13,9 +13,10 @@ from collector.pymisp_provider import PyMISPRuleProvider
 log = structlog.get_logger()
 
 
-def get_rule_provider() -> MISPRuleProvider:
-    """Factory: returns MockMISPRuleProvider or PyMISPRuleProvider based on env."""
-    if os.environ.get("MISP_PROVIDER", "mock").lower() == "real":
+def get_rule_provider(provider_override: str = "") -> MISPRuleProvider:
+    """Factory: returns MockMISPRuleProvider or PyMISPRuleProvider based on env or override."""
+    prov = provider_override or os.environ.get("MISP_PROVIDER", "mock")
+    if prov.lower() == "real":
         return PyMISPRuleProvider()
     return MockMISPRuleProvider()
 

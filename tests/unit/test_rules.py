@@ -242,18 +242,18 @@ rule suspicious_yara {
 class TestXMLMerger(unittest.TestCase):
 
     def test_next_available_id_basic(self):
-        used = {100000, 100001, 100002}
+        used = {200000, 200001, 200002}
         nid = next_available_id(used)
-        self.assertEqual(nid, 100003)
-        self.assertIn(100003, used)  # also mutates used_ids
+        self.assertEqual(nid, 200003)
+        self.assertIn(200003, used)  # also mutates used_ids
 
     def test_next_available_id_fills_gaps(self):
-        used = {100000, 100002}
+        used = {200000, 200002}
         nid = next_available_id(used)
-        self.assertEqual(nid, 100001)
+        self.assertEqual(nid, 200001)
 
     def test_next_available_id_exhausted(self):
-        used = set(range(100000, 200000))
+        used = set(range(200000, 300000))
         with self.assertRaises(ValueError):
             next_available_id(used)
 
@@ -267,8 +267,8 @@ class TestXMLMerger(unittest.TestCase):
             )
             used = set()
             rid = get_or_assign_sigma_id(sigma_file, used)
-            self.assertGreaterEqual(rid, 100000)
-            self.assertLessEqual(rid, 199999)
+            self.assertGreaterEqual(rid, 200000)
+            self.assertLessEqual(rid, 299999)
             self.assertIn(rid, used)
 
             # Re-read: must return the same ID
