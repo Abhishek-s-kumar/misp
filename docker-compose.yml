@@ -1,0 +1,16 @@
+services:
+  misp-pipeline:
+    build: .
+    container_name: misp-pipeline
+    ports:
+      - "9640:9640"
+    volumes:
+      - ./repository:/app/repository
+      - ./.env:/app/.env:ro
+      - ./ansible:/app/ansible
+      - ./wazuh_ansible_key:/app/wazuh_ansible_key:ro
+      - ./.vault_pass:/app/.vault_pass:ro
+    entrypoint: ["/app/entrypoint.sh"]
+    env_file:
+      - .env
+    restart: unless-stopped

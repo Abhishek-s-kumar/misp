@@ -553,21 +553,21 @@
                     name: 'Local Mock (wazuh_managers)',
                     ip: '127.0.0.1',
                     user: 'root',
-                    keyPath: '/home/kali/Desktop/misp/wazuh_ansible_key'
+                    keyPath: ""
                 },
                 {
                     id: 'prod',
                     name: 'Production Wazuh Manager',
-                    ip: '192.168.10.150',
-                    user: 'wazuh-admin',
-                    keyPath: '/home/kali/Desktop/misp/wazuh_ansible_key'
+                    ip: '10.21.232.220',
+                    user: 'waserver',
+                    keyPath: ""
                 },
                 {
                     id: 'stage',
                     name: 'Staging Wazuh Manager',
                     ip: '192.168.10.160',
-                    user: 'wazuh-admin',
-                    keyPath: '/home/kali/Desktop/misp/wazuh_ansible_key'
+                    user: 'waserver',
+                    keyPath: ""
                 }
             ];
 
@@ -581,7 +581,7 @@
             // Operation states
             const [syncSince, setSyncSince] = useState('');
             const [mispProvider, setMispProvider] = useState('mock');
-            const [validateDir, setValidateDir] = useState('/home/kali/Desktop/misp/repository/rules');
+            const [validateDir, setValidateDir] = useState('/app/repository/rules');
             const [deployDryRun, setDeployDryRun] = useState(true);
             const [rollbackTag, setRollbackTag] = useState('');
 
@@ -809,7 +809,7 @@
                             </div>
 
                             <div className="form-group">
-                                <label>SSH Private Key Path</label>
+                                <label style={{display:"none"}}>SSH Private Key Path</label>
                                 <input 
                                     type="text" 
                                     value={sshKeyPath} 

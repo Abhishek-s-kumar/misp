@@ -1,0 +1,11 @@
+{
+  "type": "deploy",
+  "scope": "rules",
+  "commit": "1ab8c51a8cdb57cb068faa113a14b2347db50649",
+  "rule_counts": {
+    "wazuh_xml": 0,
+    "yara": 1
+  },
+  "timestamp": "2026-06-29T10:25:56.612376+00:00",
+  "operator": "mcp"
+}

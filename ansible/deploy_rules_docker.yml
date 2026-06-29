@@ -40,6 +40,7 @@
       when: copy_wazuh_rules.changed or copy_yara_rules.changed
 
     - name: Verify container is running after restart
+      check_mode: no
       command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
       register: container_status
       retries: 5

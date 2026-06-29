@@ -84,9 +84,12 @@ class StatusReport:
 
 
 def count_files_in_dir(directory: Path, glob_pattern: str = "*") -> int:
-    if not directory.exists():
+    try:
+        if not directory.exists():
+            return 0
+        return sum(1 for f in directory.glob(glob_pattern) if f.is_file() and not f.name.startswith("."))
+    except PermissionError:
         return 0
-    return sum(1 for f in directory.glob(glob_pattern) if f.is_file() and not f.name.startswith("."))
 
 
 def sync_misp_rules(
@@ -328,7 +331,7 @@ def deploy_rules(
 
         cmd = [
             "ansible-playbook",
-            "ansible/deploy_rules.yml",
+            "ansible/deploy_rules_docker.yml",
             "-i", inventory
         ]
 
@@ -382,7 +385,7 @@ def deploy_rules(
                     "yara": yara_rules_count
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "operator": "mcp"
+                "operator": os.getenv("OPERATOR_NAME", "dashboard")
             }
 
             manifest_file.write_text(json.dumps(tag_metadata, indent=2), encoding="utf-8")

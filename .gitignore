@@ -7,3 +7,5 @@ __pycache__/
 venv/
 repomix-output.md
 github_deploy_key.pub
+wazuh_ansible_key
+wazuh_ansible_key.pub
