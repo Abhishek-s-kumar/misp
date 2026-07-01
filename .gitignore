@@ -1,11 +1,33 @@
-github_deploy_key
-github_deploy_key
+# Environment
 .env
-__pycache__/
-*.pyc
+
+# Python
 .venv/
 venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Generated files
+repomix-output.xml
 repomix-output.md
+
+# SSH keys
+github_deploy_key
 github_deploy_key.pub
 wazuh_ansible_key
 wazuh_ansible_key.pub
+
+# Ansible Vault password
+.vault_pass

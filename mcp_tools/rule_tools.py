@@ -536,18 +536,29 @@ def rule_status(
             yara_rules_count = count_files_in_dir(mock_wazuh_dir / "opt" / "yara-rules")
             wazuh_running = True
         else:
-            # Run local wazuh-control check or remotely via SSH if config supports it
-            try:
-                status_res = subprocess.run(
-                    ["/var/ossec/bin/wazuh-control", "status"],
-                    capture_output=True, text=True, timeout=10
+            container_name = os.getenv("WAZUH_CONTAINER_NAME", "multi-node-wazuh.master-1")
+            def _remote(cmd):
+                return subprocess.run(
+                    ["ansible", "wazuh_managers", "-i", inventory,
+                     "-m", "ansible.builtin.shell",
+                     "-a", f"docker exec {container_name} {cmd}"],
+                    capture_output=True, text=True, timeout=30
                 )
-                wazuh_running = status_res.returncode == 0
+            try:
+                r = _remote("/var/ossec/bin/wazuh-control status")
+                wazuh_running = "wazuh-analysisd is running" in r.stdout
             except Exception:
                 wazuh_running = False
-
-            wazuh_rules_count = count_files_in_dir(Path("/var/ossec/etc/rules"))
-            yara_rules_count = count_files_in_dir(Path("/opt/yara-rules"))
+            try:
+                r = _remote('sh -c \'ls /var/ossec/etc/rules | wc -l\'')
+                wazuh_rules_count = int(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else 0
+            except Exception:
+                wazuh_rules_count = 0
+            try:
+                r = _remote('sh -c \'ls /var/ossec/etc/yara-rules | wc -l\'')
+                yara_rules_count = int(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else 0
+            except Exception:
+                yara_rules_count = 0
 
         return StatusReport(
             manager_host=manager_host,
