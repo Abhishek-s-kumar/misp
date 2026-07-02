@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
-from mcp_tools.rule_tools import sync_misp_rules, validate_rules, deploy_rules, rollback_rules, rule_status
+from mcp_tools.rule_tools import sync_misp_rules, validate_rules, deploy_rules, rollback_rules, rule_status, sync_github_rules
 from dotenv import load_dotenv
 import uvicorn, os
 
@@ -62,6 +62,11 @@ def api_deploy(req: DeployReq):
 def api_rollback(req: RollbackReq):
     r = rollback_rules(tag=req.tag, host_name=req.host_name,
                        host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
+    return vars(r)
+
+@app.post("/sync-github")
+def api_sync_github():
+    r = sync_github_rules()
     return vars(r)
 
 @app.post("/status")

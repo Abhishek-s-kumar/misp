@@ -14,6 +14,7 @@ from collector.misp_rules import get_rule_provider, MISPRuleCollector
 from validators import RuleValidator
 from processors import process_pending_rules
 from processors.git_ops import commit_and_push_to_dev, get_or_create_pr
+from collector.github_provider import GitHubRepoSource
 
 log = structlog.get_logger()
 
@@ -99,7 +100,7 @@ def sync_misp_rules(
     """
     Pull latest detection rules from MISP, validate, process, and commit to main.
     """
-    repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
     repo_dir = Path(repo_path)
     state_file = repo_dir / ".sync_state.json"
 
@@ -305,7 +306,7 @@ def deploy_rules(
     """
     Deploy validated rules to Wazuh managers via Ansible.
     """
-    repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
     rules_dir = Path(repo_path) / "rules"
 
     # Safeguard: Check if rules/wazuh and rules/yara are empty
@@ -445,7 +446,7 @@ def rollback_rules(
     """
     Rollback approved rules to a previous deployment tag.
     """
-    repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
     repo = Repo(repo_path)
     
     log.info("starting_rules_rollback", tag=tag)
@@ -512,7 +513,7 @@ def rule_status(
     """
     Check the rules status of a given manager.
     """
-    repo_path = os.getenv("TI_REPO_PATH", "/home/kali/Desktop/misp/repository")
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
     repo = Repo(repo_path)
 
     inventory = ""
@@ -583,3 +584,120 @@ def rule_status(
                 os.unlink(inventory)
             except Exception:
                 pass
+
+
+def _load_github_state(repo_path: Path) -> dict:
+    state_file = repo_path / ".sync_state.json"
+    if not state_file.exists():
+        return {}
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            return json.load(f).get("github_sources", {})
+    except Exception as e:
+        log.warning("failed_to_load_github_state", error=str(e))
+        return {}
+
+
+def _save_github_state(repo_path: Path, github_sources: dict) -> None:
+    state_file = repo_path / ".sync_state.json"
+    existing = {}
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    existing["github_sources"] = github_sources
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(existing, f)
+    except Exception as e:
+        log.error("failed_to_save_github_state", error=str(e))
+
+
+def sync_github_rules() -> SyncResult:
+    """Pull Sigma/YARA rules from configured external GitHub repos (pinned ref, manual bump)."""
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
+    repo_dir = Path(repo_path)
+    rules_dir = repo_dir / "rules"
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    extra_tags = [t.strip() for t in os.getenv("GITHUB_RULE_TAGS", "").split(",") if t.strip()]
+
+    sources = []
+    sigma_repo = os.getenv("GITHUB_SIGMA_REPO", "")
+    if sigma_repo:
+        sources.append(GitHubRepoSource(
+            repo=sigma_repo,
+            ref=os.getenv("GITHUB_SIGMA_REF", "main"),
+            path=os.getenv("GITHUB_SIGMA_PATH", ""),
+            token=token,
+            extra_tags=extra_tags,
+        ))
+    yara_repo = os.getenv("GITHUB_YARA_REPO", "")
+    if yara_repo:
+        sources.append(GitHubRepoSource(
+            repo=yara_repo,
+            ref=os.getenv("GITHUB_YARA_REF", "main"),
+            path=os.getenv("GITHUB_YARA_PATH", ""),
+            token=token,
+            extra_tags=extra_tags,
+        ))
+
+    if not sources:
+        return SyncResult(status="no_sources_configured", total_pulled=0, approved=0, rejected=0, duplicated=0, converted=0, commit_sha="")
+
+    github_state = _load_github_state(repo_dir)
+    all_raw_rules = []
+
+    for src in sources:
+        last_sha = github_state.get(src.repo)
+        raw_rules, head_sha, changed = src.fetch(last_synced_sha=last_sha)
+        github_state[src.repo] = head_sha
+        all_raw_rules.extend(raw_rules)
+
+    _save_github_state(repo_dir, github_state)
+
+    if not all_raw_rules:
+        repo = Repo(repo_dir)
+        return SyncResult(status="no_changes", total_pulled=0, approved=0, rejected=0, duplicated=0, converted=0, commit_sha=repo.head.commit.hexsha)
+
+    stats = process_pending_rules(all_raw_rules, rules_dir=rules_dir)
+
+    commit_msg = (
+        f"sync: github rules [{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}] "
+        f"pulled={stats['total']} approved={stats['approved']} converted={stats['converted']}"
+    )
+
+    repo = Repo(repo_dir)
+    repo.git.checkout("main")
+    files_to_add = []
+    if rules_dir.exists():
+        files_to_add.append("rules/")
+    if (repo_dir / "generated").exists():
+        files_to_add.append("generated/")
+    if (repo_dir / ".sync_state.json").exists():
+        files_to_add.append(".sync_state.json")
+    if files_to_add:
+        repo.git.add(files_to_add)
+
+    commit_sha = ""
+    if repo.is_dirty(untracked_files=True) or len(repo.index.diff("HEAD")) > 0:
+        commit = repo.index.commit(commit_msg)
+        commit_sha = commit.hexsha
+        try:
+            if repo.remotes:
+                repo.remotes.origin.push("main")
+        except Exception as e:
+            log.warning("git_push_github_rules_failed", error=str(e))
+
+    return SyncResult(
+        status="committed" if commit_sha else "no_changes",
+        total_pulled=stats["total"],
+        approved=stats["approved"],
+        rejected=stats["rejected"],
+        duplicated=stats["duplicated"],
+        converted=stats["converted"],
+        commit_sha=commit_sha,
+    )
