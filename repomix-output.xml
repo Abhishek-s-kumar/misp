@@ -1356,87 +1356,6 @@ $ANSIBLE_VAULT;1.1;AES256
 323134323830613638383331623665646362
 </file>
 
-<file path="api/server.py">
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional
-from mcp_tools.rule_tools import sync_misp_rules, validate_rules, deploy_rules, rollback_rules, rule_status
-from dotenv import load_dotenv
-import uvicorn, os
-
-load_dotenv()
-app = FastAPI(title="MISP→Wazuh API")
-
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-class SyncReq(BaseModel):
-    since: Optional[str] = None
-    misp_provider: str = "mock"
-
-class ValidateReq(BaseModel):
-    rule_dir: str
-
-class DeployReq(BaseModel):
-    dry_run: bool = True
-    host_name: str = ""
-    host_ip: str = ""
-    ssh_user: str = ""
-    ssh_key_path: str = ""
-
-class RollbackReq(BaseModel):
-    tag: str
-    host_name: str = ""
-    host_ip: str = ""
-    ssh_user: str = ""
-    ssh_key_path: str = ""
-
-class StatusReq(BaseModel):
-    manager_host: str
-    host_ip: str = ""
-    ssh_user: str = ""
-    ssh_key_path: str = ""
-
-@app.post("/sync")
-def api_sync(req: SyncReq):
-    r = sync_misp_rules(since=req.since, misp_provider=req.misp_provider)
-    return vars(r)
-
-@app.post("/validate")
-def api_validate(req: ValidateReq):
-    r = validate_rules(req.rule_dir)
-    return vars(r)
-
-@app.post("/deploy")
-def api_deploy(req: DeployReq):
-    r = deploy_rules(dry_run=req.dry_run, host_name=req.host_name,
-                     host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
-    return vars(r)
-
-@app.post("/rollback")
-def api_rollback(req: RollbackReq):
-    r = rollback_rules(tag=req.tag, host_name=req.host_name,
-                       host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
-    return vars(r)
-
-@app.post("/status")
-def api_status(req: StatusReq):
-    r = rule_status(
-        manager_host=req.manager_host,
-        host_ip=req.host_ip,
-        ssh_user=req.ssh_user,
-        ssh_key_path=req.ssh_key_path
-    )
-    return vars(r)
-
-# serve dashboard HTML
-app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9640)
-</file>
-
 <file path="collector/__init__.py">
 # Collector package
 </file>
@@ -4256,77 +4175,6 @@ def get_or_create_pr(
         return {"number": None, "url": None, "action": "error", "error": str(e)}
 </file>
 
-<file path="processors/metadata_writer.py">
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
-
-import structlog
-
-from collector.base import RawRule  # noqa – unused but kept for type ref
-from validators.yara_validator import ValidationResult
-
-log = structlog.get_logger()
-
-
-def write_rule_metadata(
-    metadata_dir: Path,
-    rule_name: str,
-    rule_type: str,
-    event_id: int,
-    event_uuid: str,
-    validation_result: ValidationResult,
-    converted: bool = False,
-    conversion_target: Optional[str] = None,
-    content_hash: Optional[str] = None,
-) -> Path:
-    """
-    Write a JSON metadata document recording the lifecycle of a rule.
-
-    Args:
-        metadata_dir: Path to rules/metadata/ directory.
-        rule_name: Filename of the rule.
-        rule_type: "yara" | "sigma" | "wazuh".
-        event_id: Source MISP event ID.
-        event_uuid: Source MISP event UUID.
-        validation_result: Output from the validator.
-        converted: True if the rule was compiled/converted.
-        conversion_target: Target format if converted (e.g., "wazuh").
-        content_hash: SHA-256 hash of the rule content.
-
-    Returns:
-        Path to the written metadata JSON file.
-    """
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-
-    # Strip extension for metadata filename
-    base = rule_name.rsplit(".", 1)[0] if "." in rule_name else rule_name
-    meta_file = metadata_dir / f"{base}.json"
-
-    doc = {
-        "rule_name": rule_name,
-        "rule_type": rule_type,
-        "source": "MISP",
-        "event_id": event_id,
-        "event_uuid": event_uuid,
-        "content_hash": content_hash,
-        "validation_status": "passed" if validation_result.valid else "failed",
-        "validation_errors": validation_result.errors,
-        "validation_warnings": validation_result.warnings,
-        "conversion_status": "converted" if converted else "none",
-        "conversion_target": conversion_target,
-        "deployment_status": "pending",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-    meta_file.write_text(
-        json.dumps(doc, indent=2, default=str), encoding="utf-8"
-    )
-    log.info("metadata_written", file=str(meta_file))
-    return meta_file
-</file>
-
 <file path="processors/sigma_converter.py">
 import subprocess
 import tempfile
@@ -4999,63 +4847,6 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 </file>
 
-<file path="ansible/deploy_rules_docker.yml">
----
-- name: Deploy Detection Rules to Wazuh Docker
-  hosts: wazuh_managers
-  serial: 1
-  vars:
-    wazuh_docker_dir: "~/wazuh-docker/multi-node"
-    wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
-    wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
-    container_name: "multi-node-wazuh.master-1"
-
-  tasks:
-    - name: Ensure rules directory exists on host
-      file:
-        path: "{{ wazuh_rules_host_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Ensure YARA directory exists on host
-      file:
-        path: "{{ wazuh_yara_host_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Sync compiled Wazuh rules to host volume
-      copy:
-        src: ../repository/generated/local_rules.xml
-        dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
-        mode: "0644"
-      register: copy_wazuh_rules
-
-    - name: Sync YARA rules to host volume
-      copy:
-        src: ../repository/rules/yara/
-        dest: "{{ wazuh_yara_host_dir }}/"
-        mode: "0644"
-      register: copy_yara_rules
-
-    - name: Restart Wazuh master container
-      command: "docker restart {{ container_name }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-
-    - name: Verify container is running after restart
-      check_mode: no
-      command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
-      register: container_status
-      retries: 5
-      delay: 10
-      until: "'Up' in container_status.stdout"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-
-    - name: Show container status
-      debug:
-        msg: "Wazuh master container status: {{ container_status.stdout }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-</file>
-
 <file path="ansible/deploy_rules.yml">
 ---
 - name: Deploy Detection Rules
@@ -5168,6 +4959,90 @@ asyncio_mode = "auto"
       delay: 5
       until: wazuh_status.rc == 0
       when: not (is_local_mock | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
+</file>
+
+<file path="api/server.py">
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional
+from mcp_tools.rule_tools import sync_misp_rules, validate_rules, deploy_rules, rollback_rules, rule_status
+from dotenv import load_dotenv
+import uvicorn, os
+
+load_dotenv()
+app = FastAPI(title="MISP→Wazuh API")
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+class SyncReq(BaseModel):
+    since: Optional[str] = None
+    misp_provider: str = "mock"
+
+class ValidateReq(BaseModel):
+    rule_dir: str
+
+class DeployReq(BaseModel):
+    dry_run: bool = True
+    host_name: str = ""
+    host_ip: str = ""
+    ssh_user: str = ""
+    ssh_key_path: str = ""
+    rule_names: list[str] = []
+    tags: list[str] = []
+
+class RollbackReq(BaseModel):
+    tag: str
+    host_name: str = ""
+    host_ip: str = ""
+    ssh_user: str = ""
+    ssh_key_path: str = ""
+
+class StatusReq(BaseModel):
+    manager_host: str
+    host_ip: str = ""
+    ssh_user: str = ""
+    ssh_key_path: str = ""
+
+@app.post("/sync")
+def api_sync(req: SyncReq):
+    r = sync_misp_rules(since=req.since, misp_provider=req.misp_provider)
+    return vars(r)
+
+@app.post("/validate")
+def api_validate(req: ValidateReq):
+    r = validate_rules(req.rule_dir)
+    return vars(r)
+
+@app.post("/deploy")
+def api_deploy(req: DeployReq):
+    r = deploy_rules(dry_run=req.dry_run, host_name=req.host_name,
+                     host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path,
+                     rule_names=req.rule_names or None, tags=req.tags or None)
+    return vars(r)
+
+@app.post("/rollback")
+def api_rollback(req: RollbackReq):
+    r = rollback_rules(tag=req.tag, host_name=req.host_name,
+                       host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
+    return vars(r)
+
+@app.post("/status")
+def api_status(req: StatusReq):
+    r = rule_status(
+        manager_host=req.manager_host,
+        host_ip=req.host_ip,
+        ssh_user=req.ssh_user,
+        ssh_key_path=req.ssh_key_path
+    )
+    return vars(r)
+
+# serve dashboard HTML
+app.mount("/", StaticFiles(directory="dashboard", html=True), name="dashboard")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=9640)
 </file>
 
 <file path="collector/misp_rules.py">
@@ -6275,168 +6150,6 @@ class MISPRuleCollector:
 </html>
 </file>
 
-<file path="processors/__init__.py">
-"""
-processors package — Orchestrates the pending → approved rule pipeline.
-
-Pipeline steps:
-  1. Validate each rule in pending/.
-  2. Deduplicate against existing approved/ rules.
-  3. Convert Sigma → Wazuh XML.
-  4. Move approved rules to approved/<type>/.
-  5. Write metadata to metadata/.
-"""
-
-from pathlib import Path
-from typing import Dict, List, Any
-
-import structlog
-
-from collector.base import RawRule
-from processors.deduplicator import compute_hash, compute_rule_hash, is_duplicate, load_existing_hashes
-from processors.metadata_writer import write_rule_metadata
-from validators import RuleValidator, ValidationResult
-from processors.xml_merger import (
-    get_all_used_ids,
-    get_or_assign_sigma_id,
-    get_or_assign_wazuh_ids,
-    rebuild_local_rules,
-)
-
-log = structlog.get_logger()
-
-__all__ = ["process_pending_rules"]
-
-
-def process_pending_rules(
-    rules: List[RawRule],
-    rules_dir: Path,
-) -> Dict[str, Any]:
-    """
-    Run the full processing pipeline on a list of raw rules.
-
-    1. Validate each rule.
-    2. Skip duplicates.
-    3. Write approved rules to approved/ (source) folders.
-    4. Allocate/persist IDs for Sigma & Wazuh source rules.
-    5. Write metadata.
-    6. Rebuild generated/local_rules.xml.
-
-    Args:
-        rules: List of RawRule objects from the collector.
-        rules_dir: Path to repository/rules/ (contains sigma/, yara/, wazuh/).
-
-    Returns:
-        Summary dict with counts for approved, rejected, duplicated, converted rules.
-    """
-    pending_dir = rules_dir.parent / "generated" / "pending"
-    approved_dir = rules_dir
-    metadata_dir = rules_dir.parent / "generated" / "metadata"
-
-    # Ensure directories exist
-    pending_dir.mkdir(parents=True, exist_ok=True)
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    (approved_dir / "yara").mkdir(parents=True, exist_ok=True)
-    (approved_dir / "sigma").mkdir(parents=True, exist_ok=True)
-    (approved_dir / "wazuh").mkdir(parents=True, exist_ok=True)
-    (rules_dir.parent / "generated" / "conversion_cache").mkdir(parents=True, exist_ok=True)
-
-    validator = RuleValidator()
-    existing_hashes = load_existing_hashes(approved_dir)
-    used_ids = get_all_used_ids(rules_dir)
-
-    stats = {
-        "total": len(rules),
-        "approved": 0,
-        "rejected": 0,
-        "duplicated": 0,
-        "converted": 0,
-        "errors": [],
-    }
-
-    for rule in rules:
-        # Step 0: Write to pending/ for audit trail
-        pending_file = pending_dir / rule.name
-        pending_file.write_text(rule.content, encoding="utf-8")
-
-        # Step 1: Validate
-        result = validator.validate(rule)
-        if not result.valid:
-            log.warning(
-                "rule_rejected",
-                name=rule.name,
-                errors=result.errors,
-            )
-            stats["rejected"] += 1
-            stats["errors"].append(
-                {"rule": rule.name, "errors": result.errors}
-            )
-            # Write metadata even for failures
-            write_rule_metadata(
-                metadata_dir=metadata_dir,
-                rule_name=rule.name,
-                rule_type=rule.rule_type,
-                event_id=rule.event_id,
-                event_uuid=rule.event_uuid,
-                validation_result=result,
-                content_hash=compute_hash(rule.content),
-            )
-            continue
-
-        # Step 2: Deduplicate
-        content_hash = compute_rule_hash(rule.rule_type, rule.content)
-        if is_duplicate(rule.rule_type, rule.content, existing_hashes):
-            log.info("rule_duplicate_skipped", name=rule.name)
-            stats["duplicated"] += 1
-            continue
-
-        # Step 3: Write to approved source directory & Assign IDs
-        converted = False
-        conversion_target = None
-
-        if rule.rule_type == "sigma":
-            dest = approved_dir / "sigma" / rule.name
-            dest.write_text(rule.content, encoding="utf-8")
-            # Persist and get ID in the source file
-            get_or_assign_sigma_id(dest, used_ids)
-            converted = True
-            conversion_target = "wazuh"
-            stats["converted"] += 1
-            log.info("sigma_approved_and_id_assigned", name=rule.name)
-
-        elif rule.rule_type == "yara":
-            dest = approved_dir / "yara" / rule.name
-            dest.write_text(rule.content, encoding="utf-8")
-
-        elif rule.rule_type == "wazuh":
-            dest = approved_dir / "wazuh" / rule.name
-            dest.write_text(rule.content, encoding="utf-8")
-            # Assign rules IDs in the source file
-            get_or_assign_wazuh_ids(dest, used_ids)
-
-        # Track hash to prevent future duplicates within same batch
-        existing_hashes.add(content_hash)
-        stats["approved"] += 1
-
-        # Step 4: Write metadata
-        write_rule_metadata(
-            metadata_dir=metadata_dir,
-            rule_name=rule.name,
-            rule_type=rule.rule_type,
-            event_id=rule.event_id,
-            event_uuid=rule.event_uuid,
-            validation_result=result,
-            converted=converted,
-            conversion_target=conversion_target,
-            content_hash=content_hash,
-        )
-
-    # Rebuild all rules into generated/local_rules.xml
-    rebuild_local_rules(rules_dir)
-
-    return stats
-</file>
-
 <file path="processors/deduplicator.py">
 import hashlib
 import json
@@ -6608,244 +6321,77 @@ def is_duplicate(*args, **kwargs) -> bool:
     return compute_rule_hash(rule_type, content) in existing_hashes
 </file>
 
-<file path="processors/xml_merger.py">
+<file path="processors/metadata_writer.py">
 import json
-import re
-import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Set, List
-import yaml
+from typing import Optional, List
 
 import structlog
-from processors.sigma_converter import convert_sigma_to_wazuh
+
+from collector.base import RawRule  # noqa – unused but kept for type ref
+from validators.yara_validator import ValidationResult
 
 log = structlog.get_logger()
 
 
-def next_available_id(used_ids: Set[int]) -> int:
-    """Find the next available rule ID in the MISP range 200000-299999."""
-    for rid in range(200000, 300000):
-        if rid not in used_ids:
-            used_ids.add(rid)
-            return rid
-    raise ValueError("Rule ID range 200000-299999 is exhausted.")
+def write_rule_metadata(
+    metadata_dir: Path,
+    rule_name: str,
+    rule_type: str,
+    event_id: int,
+    event_uuid: str,
+    validation_result: ValidationResult,
+    converted: bool = False,
+    conversion_target: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+) -> Path:
+    """
+    Write a JSON metadata document recording the lifecycle of a rule.
 
+    Args:
+        metadata_dir: Path to rules/metadata/ directory.
+        rule_name: Filename of the rule.
+        rule_type: "yara" | "sigma" | "wazuh".
+        event_id: Source MISP event ID.
+        event_uuid: Source MISP event UUID.
+        validation_result: Output from the validator.
+        converted: True if the rule was compiled/converted.
+        conversion_target: Target format if converted (e.g., "wazuh").
+        content_hash: SHA-256 hash of the rule content.
 
-def get_all_used_ids(rules_dir: Path) -> Set[int]:
-    """Scan wazuh rules, sigma rules, and the generated local_rules.xml to collect all allocated IDs."""
-    used = set()
-    
-    # 1. Scan approved wazuh XMLs
-    wazuh_dir = rules_dir / "wazuh"
-    if wazuh_dir.exists():
-        for f in wazuh_dir.glob("*.xml"):
-            try:
-                content = f.read_text(encoding="utf-8")
-                wrapped = f"<root>{content}</root>"
-                root = ET.fromstring(wrapped)
-                for rule in root.findall(".//rule"):
-                    rid = rule.get("id")
-                    if rid and rid.isdigit():
-                        used.add(int(rid))
-            except Exception:
-                pass
+    Returns:
+        Path to the written metadata JSON file.
+    """
+    metadata_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Scan approved sigma YAMLs
-    sigma_dir = rules_dir / "sigma"
-    if sigma_dir.exists():
-        for f in list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml")):
-            try:
-                content = f.read_text(encoding="utf-8")
-                data = yaml.safe_load(content) or {}
-                custom = data.get("custom", {})
-                if isinstance(custom, dict) and "wazuh_rule_id" in custom:
-                    rid = custom["wazuh_rule_id"]
-                    if isinstance(rid, int):
-                        used.add(rid)
-            except Exception:
-                pass
+    # Strip extension for metadata filename
+    base = rule_name.rsplit(".", 1)[0] if "." in rule_name else rule_name
+    meta_file = metadata_dir / f"{base}.json"
 
-    # 3. Scan generated/local_rules.xml
-    gen_file = rules_dir.parent / "generated" / "local_rules.xml"
-    if gen_file.exists():
-        try:
-            content = gen_file.read_text(encoding="utf-8")
-            root = ET.fromstring(content)
-            for rule in root.findall(".//rule"):
-                rid = rule.get("id")
-                if rid and rid.isdigit():
-                    used.add(int(rid))
-        except Exception:
-            pass
+    doc = {
+        "rule_name": rule_name,
+        "rule_type": rule_type,
+        "source": "MISP",
+        "event_id": event_id,
+        "event_uuid": event_uuid,
+        "content_hash": content_hash,
+        "validation_status": "passed" if validation_result.valid else "failed",
+        "validation_errors": validation_result.errors,
+        "validation_warnings": validation_result.warnings,
+        "conversion_status": "converted" if converted else "none",
+        "conversion_target": conversion_target,
+        "tags": tags or [],
+        "deployment_status": "pending",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
-    return used
-
-
-def get_or_assign_sigma_id(file_path: Path, used_ids: Set[int]) -> int:
-    """Extract the wazuh_rule_id from the Sigma rule, or allocate and persist a new one."""
-    try:
-        content = file_path.read_text(encoding="utf-8")
-        data = yaml.safe_load(content) or {}
-    except Exception:
-        data = {}
-
-    custom = data.get("custom", {})
-    if isinstance(custom, dict) and "wazuh_rule_id" in custom:
-        rid = custom["wazuh_rule_id"]
-        if isinstance(rid, int):
-            used_ids.add(rid)
-            return rid
-
-    # Allocate new
-    new_id = next_available_id(used_ids)
-    if "custom" not in data or not isinstance(data["custom"], dict):
-        data["custom"] = {}
-    data["custom"]["wazuh_rule_id"] = new_id
-
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False)
-    except Exception as e:
-        log.error("failed_to_persist_sigma_id", file=str(file_path), error=str(e))
-
-    return new_id
-
-
-def get_or_assign_wazuh_ids(file_path: Path, used_ids: Set[int]) -> bool:
-    """Scan and assign/fix rule IDs in a Wazuh XML rule file, keeping them in the 200000-299999 range."""
-    try:
-        content = file_path.read_text(encoding="utf-8")
-        # Ensure it has a root element to parse properly
-        if not content.strip().startswith("<group") and not content.strip().startswith("<rule"):
-            return False
-        wrapped = f"<root>{content}</root>"
-        root = ET.fromstring(wrapped)
-    except Exception:
-        return False
-
-    changed = False
-    rules = []
-    if root.tag == "rule":
-        rules.append(root)
-    rules.extend(root.findall(".//rule"))
-
-    for rule in rules:
-        rid = rule.get("id")
-        if not rid or not rid.isdigit() or int(rid) < 100000 or int(rid) > 199999 or int(rid) in used_ids:
-            new_id = next_available_id(used_ids)
-            rule.set("id", str(new_id))
-            changed = True
-        else:
-            used_ids.add(int(rid))
-
-    if changed:
-        try:
-            # If the original content had a root <group>, serialize its children,
-            # otherwise serialize the modified rules.
-            # Simple serialization: strip the <root> wrapper
-            content_new = "".join(ET.tostring(child, encoding="utf-8").decode("utf-8") for child in root)
-            file_path.write_text(content_new, encoding="utf-8")
-        except Exception as e:
-            log.error("failed_to_write_assigned_wazuh_ids", file=str(file_path), error=str(e))
-    return changed
-
-
-def override_xml_rule_ids(xml_content: str, target_id: int) -> str:
-    """Parse output XML and override the rule ID attribute(s) with the target ID."""
-    try:
-        wrapped = f"<root>{xml_content}</root>"
-        root = ET.fromstring(wrapped)
-        rules = root.findall(".//rule")
-        for i, rule in enumerate(rules):
-            rule.set("id", str(target_id + i))
-        return "".join(ET.tostring(child, encoding="utf-8").decode("utf-8") for child in root)
-    except Exception as e:
-        log.warning("xml_override_failed_falling_back_to_regex", error=str(e))
-        return re.sub(r'id="\d+"', f'id="{target_id}"', xml_content)
-
-
-def merge_wazuh_xml_files(xml_contents: List[str]) -> str:
-    """Merge rule tags from all XML contents under a single group element, verifying IDs."""
-    group_el = ET.Element("group", name="misp,")
-    seen_ids = set()
-
-    for content in xml_contents:
-        if not content.strip():
-            continue
-        try:
-            # Wrap to handle multiple root elements cleanly
-            wrapped = f"<root>{content}</root>"
-            root = ET.fromstring(wrapped)
-            for rule in root.findall(".//rule"):
-                rid = rule.get("id")
-                if rid:
-                    if rid in seen_ids:
-                        raise ValueError(f"Duplicate rule ID detected during XML compilation: {rid}")
-                    seen_ids.add(rid)
-                group_el.append(rule)
-        except ET.ParseError as e:
-            raise ValueError(f"Malformed XML detected: {e}")
-
-    try:
-        ET.indent(group_el, space="  ", level=0)
-    except AttributeError:
-        pass
-    return ET.tostring(group_el, encoding="utf-8").decode("utf-8")
-
-
-def rebuild_local_rules(rules_dir: Path):
-    """Compile all rules (wazuh and converted sigma) in rules_dir into a single local_rules.xml."""
-    generated_dir = rules_dir.parent / "generated"
-    cache_dir = generated_dir / "conversion_cache"
-    generated_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    xml_parts = []
-
-    # 1. Parse approved wazuh XMLs
-    wazuh_dir = rules_dir / "wazuh"
-    if wazuh_dir.exists():
-        for f in sorted(wazuh_dir.glob("*.xml")):
-            try:
-                content = f.read_text(encoding="utf-8")
-                if content.strip():
-                    xml_parts.append(content)
-            except Exception as e:
-                log.error("failed_to_read_wazuh_rule_for_merge", file=str(f), error=str(e))
-
-    # 2. Parse approved sigma YAMLs
-    sigma_dir = rules_dir / "sigma"
-    if sigma_dir.exists():
-        for f in sorted(list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml"))):
-            try:
-                content = f.read_text(encoding="utf-8")
-                data = yaml.safe_load(content) or {}
-                custom = data.get("custom", {})
-                wazuh_rule_id = custom.get("wazuh_rule_id") if isinstance(custom, dict) else None
-                if not wazuh_rule_id:
-                    continue
-
-                wazuh_xml = convert_sigma_to_wazuh(content, f.name)
-                if not wazuh_xml:
-                    continue
-
-                # Save intermediate to conversion cache
-                cache_file = cache_dir / f"{f.stem}.xml"
-                cache_file.write_text(wazuh_xml, encoding="utf-8")
-
-                # Override and append
-                overridden = override_xml_rule_ids(wazuh_xml, wazuh_rule_id)
-                xml_parts.append(overridden)
-            except Exception as e:
-                log.error("failed_to_convert_sigma_rule_for_merge", file=str(f), error=str(e))
-
-    # 3. Merge and compile
-    merged_xml = merge_wazuh_xml_files(xml_parts)
-
-    # 4. Write generated/local_rules.xml
-    output_file = generated_dir / "local_rules.xml"
-    output_file.write_text(merged_xml, encoding="utf-8")
-    log.info("rebuild_local_rules_success", output_file=str(output_file))
+    meta_file.write_text(
+        json.dumps(doc, indent=2, default=str), encoding="utf-8"
+    )
+    log.info("metadata_written", file=str(meta_file))
+    return meta_file
 </file>
 
 <file path="validators/sigma_validator.py">
@@ -7842,6 +7388,64 @@ wazuh_dir_mode: "0750"
 is_local_mock: false
 </file>
 
+<file path="ansible/deploy_rules_docker.yml">
+---
+- name: Deploy Detection Rules to Wazuh Docker
+  hosts: wazuh_managers
+  serial: 1
+  vars:
+    wazuh_docker_dir: "~/wazuh-docker/multi-node"
+    wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
+    wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
+    container_name: "multi-node-wazuh.master-1"
+    local_rules_src: "../repository/generated/local_rules.xml"
+
+  tasks:
+    - name: Ensure rules directory exists on host
+      file:
+        path: "{{ wazuh_rules_host_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure YARA directory exists on host
+      file:
+        path: "{{ wazuh_yara_host_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Sync compiled Wazuh rules to host volume
+      copy:
+        src: "{{ local_rules_src }}"
+        dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
+        mode: "0644"
+      register: copy_wazuh_rules
+
+    - name: Sync YARA rules to host volume
+      copy:
+        src: ../repository/rules/yara/
+        dest: "{{ wazuh_yara_host_dir }}/"
+        mode: "0644"
+      register: copy_yara_rules
+
+    - name: Restart Wazuh master container
+      command: "docker restart {{ container_name }}"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+
+    - name: Verify container is running after restart
+      check_mode: no
+      command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
+      register: container_status
+      retries: 5
+      delay: 10
+      until: "'Up' in container_status.stdout"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+
+    - name: Show container status
+      debug:
+        msg: "Wazuh master container status: {{ container_status.stdout }}"
+      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+</file>
+
 <file path="ansible/inventory.ini">
 [wazuh_managers]
 wazuh-mgr-1 ansible_host=10.21.232.220 ansible_user=waserver
@@ -7850,6 +7454,450 @@ wazuh-mgr-1 ansible_host=10.21.232.220 ansible_user=waserver
 ansible_python_interpreter=/usr/bin/python3
 ansible_ssh_private_key_file=/app/wazuh_ansible_key
 ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+</file>
+
+<file path="processors/__init__.py">
+"""
+processors package — Orchestrates the pending → approved rule pipeline.
+
+Pipeline steps:
+  1. Validate each rule in pending/.
+  2. Deduplicate against existing approved/ rules.
+  3. Convert Sigma → Wazuh XML.
+  4. Move approved rules to approved/<type>/.
+  5. Write metadata to metadata/.
+"""
+
+from pathlib import Path
+from typing import Dict, List, Any
+
+import structlog
+
+from collector.base import RawRule
+from processors.deduplicator import compute_hash, compute_rule_hash, is_duplicate, load_existing_hashes
+from processors.metadata_writer import write_rule_metadata
+from validators import RuleValidator, ValidationResult
+from processors.xml_merger import (
+    get_all_used_ids,
+    get_or_assign_sigma_id,
+    get_or_assign_wazuh_ids,
+    rebuild_local_rules,
+)
+
+log = structlog.get_logger()
+
+__all__ = ["process_pending_rules"]
+
+
+def process_pending_rules(
+    rules: List[RawRule],
+    rules_dir: Path,
+) -> Dict[str, Any]:
+    """
+    Run the full processing pipeline on a list of raw rules.
+
+    1. Validate each rule.
+    2. Skip duplicates.
+    3. Write approved rules to approved/ (source) folders.
+    4. Allocate/persist IDs for Sigma & Wazuh source rules.
+    5. Write metadata.
+    6. Rebuild generated/local_rules.xml.
+
+    Args:
+        rules: List of RawRule objects from the collector.
+        rules_dir: Path to repository/rules/ (contains sigma/, yara/, wazuh/).
+
+    Returns:
+        Summary dict with counts for approved, rejected, duplicated, converted rules.
+    """
+    pending_dir = rules_dir.parent / "generated" / "pending"
+    approved_dir = rules_dir
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+
+    # Ensure directories exist
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    (approved_dir / "yara").mkdir(parents=True, exist_ok=True)
+    (approved_dir / "sigma").mkdir(parents=True, exist_ok=True)
+    (approved_dir / "wazuh").mkdir(parents=True, exist_ok=True)
+    (rules_dir.parent / "generated" / "conversion_cache").mkdir(parents=True, exist_ok=True)
+
+    validator = RuleValidator()
+    existing_hashes = load_existing_hashes(approved_dir)
+    used_ids = get_all_used_ids(rules_dir)
+
+    stats = {
+        "total": len(rules),
+        "approved": 0,
+        "rejected": 0,
+        "duplicated": 0,
+        "converted": 0,
+        "errors": [],
+    }
+
+    for rule in rules:
+        # Step 0: Write to pending/ for audit trail
+        pending_file = pending_dir / rule.name
+        pending_file.write_text(rule.content, encoding="utf-8")
+
+        # Step 1: Validate
+        result = validator.validate(rule)
+        if not result.valid:
+            log.warning(
+                "rule_rejected",
+                name=rule.name,
+                errors=result.errors,
+            )
+            stats["rejected"] += 1
+            stats["errors"].append(
+                {"rule": rule.name, "errors": result.errors}
+            )
+            # Write metadata even for failures
+            write_rule_metadata(
+                metadata_dir=metadata_dir,
+                rule_name=rule.name,
+                rule_type=rule.rule_type,
+                event_id=rule.event_id,
+                event_uuid=rule.event_uuid,
+                validation_result=result,
+                content_hash=compute_hash(rule.content),
+                tags=rule.tags,
+            )
+            continue
+
+        # Step 2: Deduplicate
+        content_hash = compute_rule_hash(rule.rule_type, rule.content)
+        if is_duplicate(rule.rule_type, rule.content, existing_hashes):
+            log.info("rule_duplicate_skipped", name=rule.name)
+            stats["duplicated"] += 1
+            continue
+
+        # Step 3: Write to approved source directory & Assign IDs
+        converted = False
+        conversion_target = None
+
+        if rule.rule_type == "sigma":
+            dest = approved_dir / "sigma" / rule.name
+            dest.write_text(rule.content, encoding="utf-8")
+            # Persist and get ID in the source file
+            get_or_assign_sigma_id(dest, used_ids)
+            converted = True
+            conversion_target = "wazuh"
+            stats["converted"] += 1
+            log.info("sigma_approved_and_id_assigned", name=rule.name)
+
+        elif rule.rule_type == "yara":
+            dest = approved_dir / "yara" / rule.name
+            dest.write_text(rule.content, encoding="utf-8")
+
+        elif rule.rule_type == "wazuh":
+            dest = approved_dir / "wazuh" / rule.name
+            dest.write_text(rule.content, encoding="utf-8")
+            # Assign rules IDs in the source file
+            get_or_assign_wazuh_ids(dest, used_ids)
+
+        # Track hash to prevent future duplicates within same batch
+        existing_hashes.add(content_hash)
+        stats["approved"] += 1
+
+        # Step 4: Write metadata
+        write_rule_metadata(
+            metadata_dir=metadata_dir,
+            rule_name=rule.name,
+            rule_type=rule.rule_type,
+            event_id=rule.event_id,
+            event_uuid=rule.event_uuid,
+            validation_result=result,
+            converted=converted,
+            conversion_target=conversion_target,
+            content_hash=content_hash,
+            tags=rule.tags,
+        )
+
+    # Rebuild all rules into generated/local_rules.xml
+    rebuild_local_rules(rules_dir)
+
+    return stats
+</file>
+
+<file path="processors/xml_merger.py">
+import json
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Set, List
+import yaml
+
+import structlog
+from processors.sigma_converter import convert_sigma_to_wazuh
+
+log = structlog.get_logger()
+
+
+def next_available_id(used_ids: Set[int]) -> int:
+    """Find the next available rule ID in the MISP range 200000-299999."""
+    for rid in range(200000, 300000):
+        if rid not in used_ids:
+            used_ids.add(rid)
+            return rid
+    raise ValueError("Rule ID range 200000-299999 is exhausted.")
+
+
+def get_all_used_ids(rules_dir: Path) -> Set[int]:
+    """Scan wazuh rules, sigma rules, and the generated local_rules.xml to collect all allocated IDs."""
+    used = set()
+    
+    # 1. Scan approved wazuh XMLs
+    wazuh_dir = rules_dir / "wazuh"
+    if wazuh_dir.exists():
+        for f in wazuh_dir.glob("*.xml"):
+            try:
+                content = f.read_text(encoding="utf-8")
+                wrapped = f"<root>{content}</root>"
+                root = ET.fromstring(wrapped)
+                for rule in root.findall(".//rule"):
+                    rid = rule.get("id")
+                    if rid and rid.isdigit():
+                        used.add(int(rid))
+            except Exception:
+                pass
+
+    # 2. Scan approved sigma YAMLs
+    sigma_dir = rules_dir / "sigma"
+    if sigma_dir.exists():
+        for f in list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml")):
+            try:
+                content = f.read_text(encoding="utf-8")
+                data = yaml.safe_load(content) or {}
+                custom = data.get("custom", {})
+                if isinstance(custom, dict) and "wazuh_rule_id" in custom:
+                    rid = custom["wazuh_rule_id"]
+                    if isinstance(rid, int):
+                        used.add(rid)
+            except Exception:
+                pass
+
+    # 3. Scan generated/local_rules.xml
+    gen_file = rules_dir.parent / "generated" / "local_rules.xml"
+    if gen_file.exists():
+        try:
+            content = gen_file.read_text(encoding="utf-8")
+            root = ET.fromstring(content)
+            for rule in root.findall(".//rule"):
+                rid = rule.get("id")
+                if rid and rid.isdigit():
+                    used.add(int(rid))
+        except Exception:
+            pass
+
+    return used
+
+
+def get_or_assign_sigma_id(file_path: Path, used_ids: Set[int]) -> int:
+    """Extract the wazuh_rule_id from the Sigma rule, or allocate and persist a new one."""
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(content) or {}
+    except Exception:
+        data = {}
+
+    custom = data.get("custom", {})
+    if isinstance(custom, dict) and "wazuh_rule_id" in custom:
+        rid = custom["wazuh_rule_id"]
+        if isinstance(rid, int):
+            used_ids.add(rid)
+            return rid
+
+    # Allocate new
+    new_id = next_available_id(used_ids)
+    if "custom" not in data or not isinstance(data["custom"], dict):
+        data["custom"] = {}
+    data["custom"]["wazuh_rule_id"] = new_id
+
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False)
+    except Exception as e:
+        log.error("failed_to_persist_sigma_id", file=str(file_path), error=str(e))
+
+    return new_id
+
+
+def get_or_assign_wazuh_ids(file_path: Path, used_ids: Set[int]) -> bool:
+    """Scan and assign/fix rule IDs in a Wazuh XML rule file, keeping them in the 200000-299999 range."""
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        # Ensure it has a root element to parse properly
+        if not content.strip().startswith("<group") and not content.strip().startswith("<rule"):
+            return False
+        wrapped = f"<root>{content}</root>"
+        root = ET.fromstring(wrapped)
+    except Exception:
+        return False
+
+    changed = False
+    rules = []
+    if root.tag == "rule":
+        rules.append(root)
+    rules.extend(root.findall(".//rule"))
+
+    for rule in rules:
+        rid = rule.get("id")
+        if not rid or not rid.isdigit() or int(rid) < 100000 or int(rid) > 199999 or int(rid) in used_ids:
+            new_id = next_available_id(used_ids)
+            rule.set("id", str(new_id))
+            changed = True
+        else:
+            used_ids.add(int(rid))
+
+    if changed:
+        try:
+            # If the original content had a root <group>, serialize its children,
+            # otherwise serialize the modified rules.
+            # Simple serialization: strip the <root> wrapper
+            content_new = "".join(ET.tostring(child, encoding="utf-8").decode("utf-8") for child in root)
+            file_path.write_text(content_new, encoding="utf-8")
+        except Exception as e:
+            log.error("failed_to_write_assigned_wazuh_ids", file=str(file_path), error=str(e))
+    return changed
+
+
+def override_xml_rule_ids(xml_content: str, target_id: int) -> str:
+    """Parse output XML and override the rule ID attribute(s) with the target ID."""
+    try:
+        wrapped = f"<root>{xml_content}</root>"
+        root = ET.fromstring(wrapped)
+        rules = root.findall(".//rule")
+        for i, rule in enumerate(rules):
+            rule.set("id", str(target_id + i))
+        return "".join(ET.tostring(child, encoding="utf-8").decode("utf-8") for child in root)
+    except Exception as e:
+        log.warning("xml_override_failed_falling_back_to_regex", error=str(e))
+        return re.sub(r'id="\d+"', f'id="{target_id}"', xml_content)
+
+
+def merge_wazuh_xml_files(xml_contents: List[str]) -> str:
+    """Merge rule tags from all XML contents under a single group element, verifying IDs."""
+    group_el = ET.Element("group", name="misp,")
+    seen_ids = set()
+
+    for content in xml_contents:
+        if not content.strip():
+            continue
+        try:
+            # Wrap to handle multiple root elements cleanly
+            wrapped = f"<root>{content}</root>"
+            root = ET.fromstring(wrapped)
+            for rule in root.findall(".//rule"):
+                rid = rule.get("id")
+                if rid:
+                    if rid in seen_ids:
+                        raise ValueError(f"Duplicate rule ID detected during XML compilation: {rid}")
+                    seen_ids.add(rid)
+                group_el.append(rule)
+        except ET.ParseError as e:
+            raise ValueError(f"Malformed XML detected: {e}")
+
+    try:
+        ET.indent(group_el, space="  ", level=0)
+    except AttributeError:
+        pass
+    return ET.tostring(group_el, encoding="utf-8").decode("utf-8")
+
+
+def rebuild_local_rules(rules_dir: Path):
+    """Compile all rules (wazuh and converted sigma) in rules_dir into a single local_rules.xml."""
+    generated_dir = rules_dir.parent / "generated"
+    cache_dir = generated_dir / "conversion_cache"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    xml_parts = []
+
+    # 1. Parse approved wazuh XMLs
+    wazuh_dir = rules_dir / "wazuh"
+    if wazuh_dir.exists():
+        for f in sorted(wazuh_dir.glob("*.xml")):
+            try:
+                content = f.read_text(encoding="utf-8")
+                if content.strip():
+                    xml_parts.append(content)
+            except Exception as e:
+                log.error("failed_to_read_wazuh_rule_for_merge", file=str(f), error=str(e))
+
+    # 2. Parse approved sigma YAMLs
+    sigma_dir = rules_dir / "sigma"
+    if sigma_dir.exists():
+        for f in sorted(list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml"))):
+            try:
+                content = f.read_text(encoding="utf-8")
+                data = yaml.safe_load(content) or {}
+                custom = data.get("custom", {})
+                wazuh_rule_id = custom.get("wazuh_rule_id") if isinstance(custom, dict) else None
+                if not wazuh_rule_id:
+                    continue
+
+                wazuh_xml = convert_sigma_to_wazuh(content, f.name)
+                if not wazuh_xml:
+                    continue
+
+                # Save intermediate to conversion cache
+                cache_file = cache_dir / f"{f.stem}.xml"
+                cache_file.write_text(wazuh_xml, encoding="utf-8")
+
+                # Override and append
+                overridden = override_xml_rule_ids(wazuh_xml, wazuh_rule_id)
+                xml_parts.append(overridden)
+            except Exception as e:
+                log.error("failed_to_convert_sigma_rule_for_merge", file=str(f), error=str(e))
+
+    # 3. Merge and compile
+    merged_xml = merge_wazuh_xml_files(xml_parts)
+
+    # 4. Write generated/local_rules.xml
+    output_file = generated_dir / "local_rules.xml"
+    output_file.write_text(merged_xml, encoding="utf-8")
+    log.info("rebuild_local_rules_success", output_file=str(output_file))
+
+
+def build_filtered_rules_xml(rules_dir: Path, rule_names=None, tags=None) -> str:
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+    cache_dir = rules_dir.parent / "generated" / "conversion_cache"
+    def _matches(fname: str) -> bool:
+        if rule_names is None and tags is None:
+            return True
+        if rule_names and fname in rule_names:
+            return True
+        if tags:
+            meta_file = metadata_dir / f"{Path(fname).stem}.json"
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    if set(meta.get("tags", [])) & tags:
+                        return True
+                except Exception:
+                    pass
+        return False
+    xml_parts = []
+    wazuh_dir = rules_dir / "wazuh"
+    if wazuh_dir.exists():
+        for f in sorted(wazuh_dir.glob("*.xml")):
+            if _matches(f.name):
+                xml_parts.append(f.read_text(encoding="utf-8"))
+    sigma_dir = rules_dir / "sigma"
+    if sigma_dir.exists():
+        for f in sorted(list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml"))):
+            if not _matches(f.name):
+                continue
+            data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            custom = data.get("custom", {})
+            wazuh_rule_id = custom.get("wazuh_rule_id") if isinstance(custom, dict) else None
+            if not wazuh_rule_id:
+                continue
+            cache_file = cache_dir / f"{f.stem}.xml"
+            wazuh_xml = cache_file.read_text(encoding="utf-8") if cache_file.exists() else convert_sigma_to_wazuh(f.read_text(encoding="utf-8"), f.name)
+            xml_parts.append(override_xml_rule_ids(wazuh_xml, wazuh_rule_id))
+    return merge_wazuh_xml_files(xml_parts)
 </file>
 
 <file path="repository/generated/conversion_cache/sigma_2.xml">
@@ -7922,6 +7970,30 @@ status: experimental
 title: Test Sigma Rule
 </file>
 
+<file path="requirements.txt">
+pymisp>=2.4.170
+requests>=2.31.0
+pydantic>=2.0.0
+validators>=0.22.0
+gitpython>=3.1.40
+ansible-core>=2.15.0
+mcp>=1.27.0
+python-dotenv>=1.0.0
+structlog>=23.0.0
+tenacity>=8.2.0
+schedule>=1.2.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+ruff>=0.1.0
+sigma-cli>=0.10.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+</file>
+
+<file path="repository/.sync_state.json">
+{"last_rule_sync_time": "2026-07-01T06:14:21.585648+00:00"}
+</file>
+
 <file path="tests/integration/test_rules_e2e.py">
 import os
 import json
@@ -7979,7 +8051,7 @@ def e2e_rules_env(tmp_path, monkeypatch):
     repo.create_tag("last_known_good", message="Baseline valid ruleset")
 
     # Copy ansible folder to tmp_path
-    shutil.copytree("/home/kali/Desktop/misp/ansible", tmp_path / "ansible")
+    shutil.copytree("/home/rpi/misp/ansible", tmp_path / "ansible")
 
     # Override inventory to use localhost with local connection to avoid SSH timeouts
     inventory_path = tmp_path / "ansible" / "inventory.ini"
@@ -8024,7 +8096,7 @@ def e2e_rules_env(tmp_path, monkeypatch):
     monkeypatch.setenv("ANSIBLE_INVENTORY", str(tmp_path / "ansible" / "inventory.ini"))
 
     # Prepend virtual env bin directory to PATH for subprocess calls to ansible-playbook
-    venv_bin = "/home/kali/Desktop/misp/.venv/bin"
+    venv_bin = "/home/rpi/misp/.venv/bin"
     monkeypatch.setenv("PATH", f"{venv_bin}:{os.environ.get('PATH', '')}")
 
     # Patch MockMISPRuleProvider to point to our temp fixture
@@ -8599,7 +8671,7 @@ class TestCheckRuleIds(unittest.TestCase):
         import importlib.util, sys
         spec = importlib.util.spec_from_file_location(
             "check_rule_ids",
-            Path("/home/kali/Desktop/misp/DaC/check_rule_ids.py"),
+            Path("/home/rpi/misp/DaC/check_rule_ids.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -8641,28 +8713,40 @@ class TestCheckRuleIds(unittest.TestCase):
         self.assertNotIn(100011, dups)
 </file>
 
-<file path="requirements.txt">
-pymisp>=2.4.170
-requests>=2.31.0
-pydantic>=2.0.0
-validators>=0.22.0
-gitpython>=3.1.40
-ansible-core>=2.15.0
-mcp>=1.27.0
-python-dotenv>=1.0.0
-structlog>=23.0.0
-tenacity>=8.2.0
-schedule>=1.2.0
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
-ruff>=0.1.0
-sigma-cli>=0.10.0
-fastapi>=0.110.0
-uvicorn>=0.29.0
-</file>
+<file path=".gitignore">
+# Environment
+.env
 
-<file path="repository/.sync_state.json">
-{"last_rule_sync_time": "2026-07-01T06:14:21.585648+00:00"}
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Generated files
+repomix-output.xml
+repomix-output.md
+
+# SSH keys
+github_deploy_key
+github_deploy_key.pub
+wazuh_ansible_key
+wazuh_ansible_key.pub
+
+# Ansible Vault password
+.vault_pass
 </file>
 
 <file path="mcp_tools/rule_tools.py">
@@ -8967,6 +9051,8 @@ def deploy_rules(
     host_ip: str = "",
     ssh_user: str = "",
     ssh_key_path: str = "",
+    rule_names=None,
+    tags=None,
 ) -> DeployResult:
     """
     Deploy validated rules to Wazuh managers via Ansible.
@@ -8997,10 +9083,18 @@ def deploy_rules(
         vault_pass_file = os.getenv("ANSIBLE_VAULT_PASSWORD_FILE", "ansible/.vault_pass")
         is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
 
+        deploy_src_file = Path(repo_path).resolve() / "generated" / "local_rules.xml"
+        if rule_names or tags:
+            from processors.xml_merger import build_filtered_rules_xml
+            filtered_xml = build_filtered_rules_xml(rules_dir, rule_names=set(rule_names) if rule_names else None, tags=set(tags) if tags else None)
+            deploy_src_file = Path(repo_path).resolve() / "generated" / "deploy_filtered.xml"
+            deploy_src_file.write_text(filtered_xml, encoding="utf-8")
+
         cmd = [
             "ansible-playbook",
             "ansible/deploy_rules_docker.yml",
-            "-i", inventory
+            "-i", inventory,
+            "-e", f"local_rules_src={deploy_src_file}"
         ]
 
         if is_local_mock:
@@ -9241,42 +9335,6 @@ def rule_status(
                 os.unlink(inventory)
             except Exception:
                 pass
-</file>
-
-<file path=".gitignore">
-# Environment
-.env
-
-# Python
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Generated files
-repomix-output.xml
-repomix-output.md
-
-# SSH keys
-github_deploy_key
-github_deploy_key.pub
-wazuh_ansible_key
-wazuh_ansible_key.pub
-
-# Ansible Vault password
-.vault_pass
 </file>
 
 </files>
