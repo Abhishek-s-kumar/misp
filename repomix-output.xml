@@ -312,6 +312,7 @@ repository/
     pending/
       sigma_2.yml
       yara_3.yar
+    deploy_filtered.xml
     local_rules.xml
   iocs/
     misp_domains
@@ -1343,6 +1344,10 @@ Unnamed repository; edit this file 'description' to name the repository.
 
 <file path="repository/.git/HEAD">
 ref: refs/heads/main
+</file>
+
+<file path="repository/generated/deploy_filtered.xml">
+<group name="misp," />
 </file>
 
 <file path="ansible/group_vars/vault.yml">
@@ -5135,1021 +5140,6 @@ class MISPRuleCollector:
         return raw_rules
 </file>
 
-<file path="dashboard/index.html">
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wazuh Detection Pipeline Orchestrator</title>
-    
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-    
-    <!-- FontAwesome for Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
-    <!-- CSS Styling (Vanilla CSS - Premium Dark Mode & Glassmorphism) -->
-    <style>
-        :root {
-            --bg-color: #0b0c16;
-            --card-bg: rgba(22, 24, 47, 0.6);
-            --card-border: rgba(255, 255, 255, 0.08);
-            --text-color: #f1f3f9;
-            --text-muted: #8b92b6;
-            --primary: #5865f2;
-            --primary-glow: rgba(88, 101, 242, 0.3);
-            --success: #10b981;
-            --success-glow: rgba(16, 185, 129, 0.2);
-            --danger: #ef4444;
-            --danger-glow: rgba(239, 68, 68, 0.2);
-            --warning: #f59e0b;
-            --warning-glow: rgba(245, 158, 11, 0.2);
-            --accent: #d946ef;
-            --accent-glow: rgba(217, 70, 239, 0.2);
-            --console-bg: #05060f;
-            --font-main: 'Outfit', sans-serif;
-            --font-mono: 'JetBrains Mono', monospace;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: var(--font-main);
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow-x: hidden;
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(88, 101, 242, 0.08) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(217, 70, 239, 0.06) 0%, transparent 45%);
-            background-attachment: fixed;
-        }
-
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1.5rem 2.5rem;
-            background: rgba(11, 12, 22, 0.8);
-            backdrop-filter: blur(12px);
-            border-bottom: 1px solid var(--card-border);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .logo-section i {
-            font-size: 1.75rem;
-            color: var(--primary);
-            filter: drop-shadow(0 0 8px var(--primary));
-        }
-
-        .logo-section h1 {
-            font-size: 1.4rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #fff 30%, #8b92b6 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: 0.5px;
-        }
-
-        .system-status {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.85rem;
-            font-weight: 500;
-            padding: 0.4rem 0.8rem;
-            border-radius: 9999px;
-            background: rgba(16, 185, 129, 0.1);
-            color: var(--success);
-            border: 1px solid rgba(16, 185, 129, 0.2);
-            transition: all 0.3s ease;
-        }
-
-        .system-status.checking {
-            background: rgba(245, 158, 11, 0.1);
-            color: var(--warning);
-            border: 1px solid rgba(245, 158, 11, 0.2);
-        }
-
-        .system-status .pulse-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: currentColor;
-            box-shadow: 0 0 8px currentColor;
-            animation: pulse 1.8s infinite;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(0.9); opacity: 0.6; }
-            50% { transform: scale(1.15); opacity: 1; }
-            100% { transform: scale(0.9); opacity: 0.6; }
-        }
-
-        .main-container {
-            display: grid;
-            grid-template-columns: 350px 1fr;
-            gap: 1.5rem;
-            padding: 2rem 2.5rem;
-            flex-grow: 1;
-            max-width: 1600px;
-            width: 100%;
-            margin: 0 auto;
-        }
-
-        @media (max-width: 1024px) {
-            .main-container {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .card {
-            background: var(--card-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--card-border);
-            border-radius: 16px;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1.25rem;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            transition: transform 0.3s ease, border-color 0.3s ease;
-        }
-
-        .card:hover {
-            border-color: rgba(255, 255, 255, 0.15);
-        }
-
-        .card-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: #fff;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            padding-bottom: 0.75rem;
-        }
-
-        .card-title i {
-            color: var(--primary);
-        }
-
-        /* Form Controls */
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .form-group label {
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .form-group input, .form-group select {
-            background: rgba(5, 6, 15, 0.7);
-            border: 1px solid var(--card-border);
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            color: #fff;
-            font-family: var(--font-main);
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-        }
-
-        .form-group input:focus, .form-group select:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px var(--primary-glow);
-        }
-
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.75rem;
-        }
-
-        /* Preset Buttons */
-        .presets-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 0.5rem;
-        }
-
-        .preset-btn {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--card-border);
-            border-radius: 8px;
-            padding: 0.6rem 1rem;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            font-weight: 500;
-            text-align: left;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .preset-btn:hover, .preset-btn.active {
-            background: rgba(88, 101, 242, 0.1);
-            border-color: var(--primary);
-            color: #fff;
-        }
-
-        .preset-btn i {
-            opacity: 0;
-            transition: opacity 0.2s ease;
-            color: var(--primary);
-        }
-
-        .preset-btn.active i {
-            opacity: 1;
-        }
-
-        /* Operations Grid */
-        .workspace-grid {
-            display: grid;
-            grid-template-rows: auto 1fr;
-            gap: 1.5rem;
-        }
-
-        .operations-panel {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.25rem;
-        }
-
-        .op-card {
-            background: rgba(22, 24, 47, 0.4);
-            border: 1px solid var(--card-border);
-            border-radius: 12px;
-            padding: 1.25rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-            position: relative;
-            overflow: hidden;
-            transition: all 0.3s ease;
-        }
-
-        .op-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            background: var(--primary);
-            opacity: 0.6;
-        }
-
-        .op-card.sync-card::before { background: var(--accent); }
-        .op-card.validate-card::before { background: var(--warning); }
-        .op-card.deploy-card::before { background: var(--primary); }
-        .op-card.rollback-card::before { background: var(--danger); }
-        .op-card.status-card::before { background: var(--success); }
-
-        .op-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(255, 255, 255, 0.12);
-            background: rgba(22, 24, 47, 0.55);
-        }
-
-        .op-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .op-header h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #fff;
-        }
-
-        .op-header i {
-            font-size: 1.1rem;
-            color: var(--text-muted);
-        }
-
-        .sync-card .op-header i { color: var(--accent); }
-        .validate-card .op-header i { color: var(--warning); }
-        .deploy-card .op-header i { color: var(--primary); }
-        .rollback-card .op-header i { color: var(--danger); }
-        .status-card .op-header i { color: var(--success); }
-
-        .op-desc {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            line-height: 1.4;
-        }
-
-        /* Action Buttons */
-        .btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 0.7rem 1.25rem;
-            font-family: var(--font-main);
-            font-size: 0.85rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-            width: 100%;
-        }
-
-        .btn:hover:not(:disabled) {
-            filter: brightness(1.15);
-            box-shadow: 0 4px 12px var(--primary-glow);
-        }
-
-        .btn:active:not(:disabled) {
-            transform: translateY(1px);
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-sync { background: var(--accent); }
-        .btn-sync:hover:not(:disabled) { box-shadow: 0 4px 12px var(--accent-glow); }
-        .btn-validate { background: var(--warning); color: #000; }
-        .btn-validate:hover:not(:disabled) { box-shadow: 0 4px 12px var(--warning-glow); }
-        .btn-rollback { background: var(--danger); }
-        .btn-rollback:hover:not(:disabled) { box-shadow: 0 4px 12px var(--danger-glow); }
-        .btn-status { background: var(--success); }
-        .btn-status:hover:not(:disabled) { box-shadow: 0 4px 12px var(--success-glow); }
-
-        .checkbox-container {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            cursor: pointer;
-            user-select: none;
-            font-size: 0.85rem;
-            color: var(--text-color);
-        }
-
-        .checkbox-container input {
-            cursor: pointer;
-            accent-color: var(--primary);
-            width: 16px;
-            height: 16px;
-        }
-
-        /* Console Section */
-        .console-container {
-            background: var(--console-bg);
-            border: 1px solid var(--card-border);
-            border-radius: 16px;
-            box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            grid-column: 1 / -1;
-            height: 380px;
-        }
-
-        .console-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem 1.25rem;
-            background: rgba(255, 255, 255, 0.02);
-            border-bottom: 1px solid var(--card-border);
-        }
-
-        .console-title {
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .console-actions {
-            display: flex;
-            gap: 0.75rem;
-        }
-
-        .console-action-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: color 0.2s ease;
-        }
-
-        .console-action-btn:hover {
-            color: #fff;
-        }
-
-        .console-body {
-            flex-grow: 1;
-            padding: 1.25rem;
-            overflow-y: auto;
-            font-family: var(--font-mono);
-            font-size: 0.85rem;
-            line-height: 1.5;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: rgba(0,0,0,0.1);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: rgba(255,255,255,0.1);
-            border-radius: 99px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255,255,255,0.2);
-        }
-
-        .log-entry {
-            display: flex;
-            flex-direction: column;
-            gap: 0.25rem;
-            padding: 0.5rem;
-            border-radius: 6px;
-            background: rgba(255,255,255,0.01);
-            border-left: 3px solid var(--text-muted);
-            animation: fadeIn 0.3s ease-out;
-        }
-
-        .log-entry.info { border-left-color: var(--primary); }
-        .log-entry.success { border-left-color: var(--success); background: rgba(16, 185, 129, 0.02); }
-        .log-entry.error { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.02); }
-        .log-entry.warning { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.02); }
-
-        .log-header {
-            display: flex;
-            justify-content: space-between;
-            color: var(--text-muted);
-            font-size: 0.75rem;
-        }
-
-        .log-content {
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-
-        .log-json {
-            margin-top: 0.4rem;
-            background: rgba(0, 0, 0, 0.4);
-            padding: 0.6rem;
-            border-radius: 6px;
-            font-size: 0.8rem;
-            border: 1px solid rgba(255,255,255,0.03);
-            color: #a5b4fc;
-            overflow-x: auto;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .loading-spinner {
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-
-        footer {
-            text-align: center;
-            padding: 2rem;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            border-top: 1px solid var(--card-border);
-            margin-top: auto;
-            background: rgba(11, 12, 22, 0.4);
-        }
-    </style>
-</head>
-<body>
-    <div id="root"></div>
-
-    <!-- React and Babel CDN -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- React Code -->
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
-
-        function App() {
-            // Preset Hosts Configuration
-            const hostPresets = [
-                {
-                    id: 'mock',
-                    name: 'Local Mock (wazuh_managers)',
-                    ip: '127.0.0.1',
-                    user: 'root',
-                    keyPath: ""
-                },
-                {
-                    id: 'prod',
-                    name: 'Production Wazuh Manager',
-                    ip: '10.21.232.220',
-                    user: 'waserver',
-                    keyPath: ""
-                },
-                {
-                    id: 'stage',
-                    name: 'Staging Wazuh Manager',
-                    ip: '192.168.10.160',
-                    user: 'waserver',
-                    keyPath: ""
-                }
-            ];
-
-            // Host State
-            const [selectedPreset, setSelectedPreset] = useState('mock');
-            const [hostName, setHostName] = useState(hostPresets[0].name);
-            const [hostIp, setHostIp] = useState(hostPresets[0].ip);
-            const [sshUser, setSshUser] = useState(hostPresets[0].user);
-            const [sshKeyPath, setSshKeyPath] = useState(hostPresets[0].keyPath);
-
-            // Operation states
-            const [syncSince, setSyncSince] = useState('');
-            const [mispProvider, setMispProvider] = useState('mock');
-            const [validateDir, setValidateDir] = useState('/app/repository/rules');
-            const [deployDryRun, setDeployDryRun] = useState(true);
-            const [rollbackTag, setRollbackTag] = useState('');
-
-            // App State
-            const [logs, setLogs] = useState([]);
-            const [isRunning, setIsRunning] = useState(false);
-            const [activeTool, setActiveTool] = useState(null);
-            const [serverStatus, setServerStatus] = useState('checking');
-
-            const consoleEndRef = useRef(null);
-
-            // Helper to add log entries
-            const addLog = (type, message, details = null) => {
-                const newLog = {
-                    id: Date.now() + Math.random(),
-                    timestamp: new Date().toLocaleTimeString(),
-                    type,
-                    message,
-                    details
-                };
-                setLogs(prev => [...prev, newLog]);
-            };
-
-            // Clear logs
-            const clearLogs = () => {
-                setLogs([]);
-                addLog('info', 'Console logs cleared.');
-            };
-
-            // Check API server health
-            const checkHealth = async () => {
-                try {
-                    setServerStatus('checking');
-                    const res = await fetch('/status', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            manager_host: 'healthcheck_probe',
-                            host_ip: '127.0.0.1',
-                            ssh_user: 'root',
-                            ssh_key_path: '/dev/null'
-                        })
-                    });
-                    if (res.ok) {
-                        setServerStatus('connected');
-                    } else {
-                        setServerStatus('error');
-                    }
-                } catch (e) {
-                    setServerStatus('error');
-                }
-            };
-
-            useEffect(() => {
-                addLog('info', 'Detection pipeline dashboard loaded. Ready for actions.');
-                checkHealth();
-                const interval = setInterval(checkHealth, 15000);
-                return () => clearInterval(interval);
-            }, []);
-
-            // Scroll to bottom of console
-            useEffect(() => {
-                if (consoleEndRef.current) {
-                    consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
-                }
-            }, [logs]);
-
-            // Handle Preset Selection
-            const handlePresetChange = (presetId) => {
-                const preset = hostPresets.find(p => p.id === presetId);
-                if (preset) {
-                    setSelectedPreset(presetId);
-                    setHostName(preset.name);
-                    setHostIp(preset.ip);
-                    setSshUser(preset.user);
-                    setSshKeyPath(preset.keyPath);
-                    addLog('info', `Configured host preset: ${preset.name}`);
-                }
-            };
-
-            // Run Tool Integration
-            const runTool = async (toolId, opts = {}) => {
-                if (isRunning) return;
-                
-                setIsRunning(true);
-                setActiveTool(toolId);
-                addLog('info', `Starting tool invocation: ${toolId.toUpperCase()}...`);
-
-                const activeHost = {
-                    name: hostName,
-                    ip: hostIp,
-                    user: sshUser,
-                    keyPath: sshKeyPath
-                };
-                const misp = mispProvider;
-
-                try {
-                    const endpointMap = {
-                        sync:     { url: "/sync",     body: { since: opts.since || null, misp_provider: misp } },
-                        validate: { url: "/validate", body: { rule_dir: opts.dir } },
-                        deploy:   { url: "/deploy",   body: { dry_run: opts.dryRun, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
-                        rollback: { url: "/rollback", body: { tag: opts.tag,        host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
-                        status:   { url: "/status",   body: { manager_host: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
-                    };
-
-                    const { url, body } = endpointMap[toolId];
-                    
-                    addLog('info', `HTTP POST ${url}`, body);
-
-                    const res = await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(body)
-                    });
-
-                    if (!res.ok) {
-                        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
-                    }
-
-                    const data = await res.json();
-                    
-                    // Interpret output status
-                    const isSuccess = data.status === "ok" || data.status === "committed" || data.status === "no_changes" || data.valid_count !== undefined || data.wazuh_running !== undefined;
-                    
-                    if (isSuccess) {
-                        addLog('success', `Tool completed successfully.`, data);
-                        
-                        // If it is status query, logs can display wazuh status specifically
-                        if (toolId === 'status') {
-                            addLog('success', `Wazuh service: ${data.wazuh_running ? 'RUNNING' : 'STOPPED'} | Yara rules: ${data.yara_rules_count} | Wazuh rules: ${data.wazuh_rules_count}`);
-                            if (data.last_deployment_tag) {
-                                setRollbackTag(data.last_deployment_tag);
-                            }
-                        }
-                        if (toolId === 'deploy' && data.deploy_tag) {
-                            setRollbackTag(data.deploy_tag);
-                        }
-                    } else {
-                        addLog('error', `Tool failed. Status: ${data.status || 'unknown error'}`, data);
-                    }
-
-                } catch (error) {
-                    addLog('error', `Request exception: ${error.message}`);
-                } finally {
-                    setIsRunning(false);
-                    setActiveTool(null);
-                }
-            };
-
-            return (
-                <React.Fragment>
-                    <header>
-                        <div className="logo-section">
-                            <i className="fa-solid fa-shield-halved"></i>
-                            <h1>Wazuh Detection Pipeline Orchestrator</h1>
-                        </div>
-                        <div className={`system-status ${serverStatus === 'checking' ? 'checking' : ''}`}>
-                            <div className="pulse-dot"></div>
-                            {serverStatus === 'connected' && 'API Server: Connected'}
-                            {serverStatus === 'checking' && 'API Server: Checking...'}
-                            {serverStatus === 'error' && 'API Server: Disconnected'}
-                        </div>
-                    </header>
-
-                    <div className="main-container">
-                        {/* Host Config Column */}
-                        <div className="card">
-                            <div className="card-title">
-                                <i className="fa-solid fa-server"></i>
-                                Active Host Configuration
-                            </div>
-
-                            <div className="presets-grid">
-                                <label style={{fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase'}}>Manager Preset</label>
-                                {hostPresets.map(preset => (
-                                    <button 
-                                        key={preset.id} 
-                                        className={`preset-btn ${selectedPreset === preset.id ? 'active' : ''}`}
-                                        onClick={() => handlePresetChange(preset.id)}
-                                    >
-                                        <span>{preset.id === 'mock' ? '🔧 ' : '🖥️ '}{preset.id.toUpperCase()}</span>
-                                        <i className="fa-solid fa-circle-check"></i>
-                                    </button>
-                                ))}
-                            </div>
-
-                            <div className="form-group">
-                                <label>Host Name</label>
-                                <input 
-                                    type="text" 
-                                    value={hostName} 
-                                    onChange={(e) => { setHostName(e.target.value); setSelectedPreset(''); }} 
-                                />
-                            </div>
-
-                            <div className="form-group">
-                                <label>Ansible Host IP</label>
-                                <input 
-                                    type="text" 
-                                    value={hostIp} 
-                                    onChange={(e) => { setHostIp(e.target.value); setSelectedPreset(''); }} 
-                                />
-                            </div>
-
-                            <div className="form-row">
-                                <div className="form-group">
-                                    <label>SSH User</label>
-                                    <input 
-                                        type="text" 
-                                        value={sshUser} 
-                                        onChange={(e) => { setSshUser(e.target.value); setSelectedPreset(''); }} 
-                                    />
-                                </div>
-                                <div className="form-group">
-                                    <label>MISP Provider</label>
-                                    <select 
-                                        value={mispProvider} 
-                                        onChange={(e) => setMispProvider(e.target.value)}
-                                    >
-                                        <option value="mock">Mock</option>
-                                        <option value="real">Real MISP</option>
-                                        <option value="">Default (Env)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="form-group">
-                                <label style={{display:"none"}}>SSH Private Key Path</label>
-                                <input 
-                                    type="text" 
-                                    value={sshKeyPath} 
-                                    onChange={(e) => { setSshKeyPath(e.target.value); setSelectedPreset(''); }} 
-                                />
-                            </div>
-
-                            <button 
-                                className="btn btn-status"
-                                disabled={isRunning}
-                                onClick={() => runTool('status')}
-                            >
-                                {isRunning && activeTool === 'status' ? (
-                                    <i className="fa-solid fa-spinner loading-spinner"></i>
-                                ) : (
-                                    <i className="fa-solid fa-network-wired"></i>
-                                )}
-                                Query Manager Status
-                            </button>
-                        </div>
-
-                        {/* Operations Control Panel Column */}
-                        <div className="workspace-grid">
-                            <div className="operations-panel">
-                                {/* Sync MISP Rules */}
-                                <div className="op-card sync-card">
-                                    <div className="op-header">
-                                        <h3>Sync MISP Rules</h3>
-                                        <i className="fa-solid fa-cloud-arrow-down"></i>
-                                    </div>
-                                    <div className="op-desc">
-                                        Ingest threat intelligence rules from MISP, assign Wazuh rule IDs, and commit to the dev/main branch.
-                                    </div>
-                                    <div className="form-group" style={{marginTop: 'auto'}}>
-                                        <label>Since Date (Optional)</label>
-                                        <input 
-                                            type="datetime-local" 
-                                            value={syncSince} 
-                                            onChange={(e) => setSyncSince(e.target.value)} 
-                                        />
-                                    </div>
-                                    <button 
-                                        className="btn btn-sync"
-                                        disabled={isRunning}
-                                        onClick={() => runTool('sync', { since: syncSince })}
-                                    >
-                                        {isRunning && activeTool === 'sync' ? (
-                                            <i className="fa-solid fa-spinner loading-spinner"></i>
-                                        ) : (
-                                            <i className="fa-solid fa-rotate"></i>
-                                        )}
-                                        Run Ingestion
-                                    </button>
-                                </div>
-
-                                {/* Validate Rules */}
-                                <div className="op-card validate-card">
-                                    <div className="op-header">
-                                        <h3>Validate Rules</h3>
-                                        <i className="fa-solid fa-clipboard-check"></i>
-                                    </div>
-                                    <div className="op-desc">
-                                        Run automated checkers (YARA engine, Sigma validators, Wazuh rule analyzers) over rule files.
-                                    </div>
-                                    <div className="form-group" style={{marginTop: 'auto'}}>
-                                        <label>Rule Directory</label>
-                                        <input 
-                                            type="text" 
-                                            value={validateDir} 
-                                            onChange={(e) => setValidateDir(e.target.value)} 
-                                        />
-                                    </div>
-                                    <button 
-                                        className="btn btn-validate"
-                                        disabled={isRunning}
-                                        onClick={() => runTool('validate', { dir: validateDir })}
-                                    >
-                                        {isRunning && activeTool === 'validate' ? (
-                                            <i className="fa-solid fa-spinner loading-spinner"></i>
-                                        ) : (
-                                            <i className="fa-solid fa-check-double"></i>
-                                        )}
-                                        Validate Ruleset
-                                    </button>
-                                </div>
-
-                                {/* Deploy Rules */}
-                                <div className="op-card deploy-card">
-                                    <div className="op-header">
-                                        <h3>Deploy Rules</h3>
-                                        <i className="fa-solid fa-rocket"></i>
-                                    </div>
-                                    <div className="op-desc">
-                                        Deploy validated Wazuh rulesets and YARA threat feeds to the target manager via Ansible playbooks.
-                                    </div>
-                                    <div style={{marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
-                                        <label className="checkbox-container">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={deployDryRun} 
-                                                onChange={(e) => setDeployDryRun(e.target.checked)} 
-                                            />
-                                            Ansible Dry Run (Check mode)
-                                        </label>
-                                    </div>
-                                    <button 
-                                        className="btn"
-                                        disabled={isRunning}
-                                        onClick={() => runTool('deploy', { dryRun: deployDryRun })}
-                                    >
-                                        {isRunning && activeTool === 'deploy' ? (
-                                            <i className="fa-solid fa-spinner loading-spinner"></i>
-                                        ) : (
-                                            <i className="fa-solid fa-arrow-up-right-from-square"></i>
-                                        )}
-                                        Deploy to Host
-                                    </button>
-                                </div>
-
-                                {/* Rollback Rules */}
-                                <div className="op-card rollback-card">
-                                    <div className="op-header">
-                                        <h3>Rollback Rules</h3>
-                                        <i className="fa-solid fa-history"></i>
-                                    </div>
-                                    <div className="op-desc">
-                                        Revert managers and codebase rulesets to a previously saved deployment git tag manifest.
-                                    </div>
-                                    <div className="form-group" style={{marginTop: 'auto'}}>
-                                        <label>Target Git Tag</label>
-                                        <input 
-                                            type="text" 
-                                            placeholder="deploy-rules-YYYYMMDD-HHMMSS" 
-                                            value={rollbackTag} 
-                                            onChange={(e) => setRollbackTag(e.target.value)} 
-                                        />
-                                    </div>
-                                    <button 
-                                        className="btn btn-rollback"
-                                        disabled={isRunning || !rollbackTag}
-                                        onClick={() => runTool('rollback', { tag: rollbackTag })}
-                                    >
-                                        {isRunning && activeTool === 'rollback' ? (
-                                            <i className="fa-solid fa-spinner loading-spinner"></i>
-                                        ) : (
-                                            <i className="fa-solid fa-backward"></i>
-                                        )}
-                                        Rollback Ruleset
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Console output widget */}
-                            <div className="console-container">
-                                <div className="console-header">
-                                    <div className="console-title">
-                                        <i className="fa-solid fa-terminal"></i>
-                                        Pipelines Operations Terminal Logs
-                                    </div>
-                                    <div className="console-actions">
-                                        <button className="console-action-btn" onClick={clearLogs} title="Clear Console">
-                                            <i className="fa-solid fa-trash-can"></i>
-                                        </button>
-                                        <button className="console-action-btn" onClick={checkHealth} title="Force Healthcheck">
-                                            <i className="fa-solid fa-arrows-rotate"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="console-body">
-                                    {logs.map(log => (
-                                        <div key={log.id} className={`log-entry ${log.type}`}>
-                                            <div className="log-header">
-                                                <span>[{log.timestamp}] {log.type.toUpperCase()}</span>
-                                            </div>
-                                            <div className="log-content">{log.message}</div>
-                                            {log.details && (
-                                                <pre className="log-json">
-                                                    {JSON.stringify(log.details, null, 2)}
-                                                </pre>
-                                            )}
-                                        </div>
-                                    ))}
-                                    <div ref={consoleEndRef} />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <footer>
-                        &copy; 2026 Wazuh Detection Rules Orchestrator. Powered by FastAPI & MCP.
-                    </footer>
-                </React.Fragment>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
-</file>
-
 <file path="processors/deduplicator.py">
 import hashlib
 import json
@@ -7388,64 +6378,6 @@ wazuh_dir_mode: "0750"
 is_local_mock: false
 </file>
 
-<file path="ansible/deploy_rules_docker.yml">
----
-- name: Deploy Detection Rules to Wazuh Docker
-  hosts: wazuh_managers
-  serial: 1
-  vars:
-    wazuh_docker_dir: "~/wazuh-docker/multi-node"
-    wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
-    wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
-    container_name: "multi-node-wazuh.master-1"
-    local_rules_src: "../repository/generated/local_rules.xml"
-
-  tasks:
-    - name: Ensure rules directory exists on host
-      file:
-        path: "{{ wazuh_rules_host_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Ensure YARA directory exists on host
-      file:
-        path: "{{ wazuh_yara_host_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Sync compiled Wazuh rules to host volume
-      copy:
-        src: "{{ local_rules_src }}"
-        dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
-        mode: "0644"
-      register: copy_wazuh_rules
-
-    - name: Sync YARA rules to host volume
-      copy:
-        src: ../repository/rules/yara/
-        dest: "{{ wazuh_yara_host_dir }}/"
-        mode: "0644"
-      register: copy_yara_rules
-
-    - name: Restart Wazuh master container
-      command: "docker restart {{ container_name }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-
-    - name: Verify container is running after restart
-      check_mode: no
-      command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
-      register: container_status
-      retries: 5
-      delay: 10
-      until: "'Up' in container_status.stdout"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-
-    - name: Show container status
-      debug:
-        msg: "Wazuh master container status: {{ container_status.stdout }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
-</file>
-
 <file path="ansible/inventory.ini">
 [wazuh_managers]
 wazuh-mgr-1 ansible_host=10.21.232.220 ansible_user=waserver
@@ -7454,6 +6386,1034 @@ wazuh-mgr-1 ansible_host=10.21.232.220 ansible_user=waserver
 ansible_python_interpreter=/usr/bin/python3
 ansible_ssh_private_key_file=/app/wazuh_ansible_key
 ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+</file>
+
+<file path="dashboard/index.html">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wazuh Detection Pipeline Orchestrator</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- CSS Styling (Vanilla CSS - Premium Dark Mode & Glassmorphism) -->
+    <style>
+        :root {
+            --bg-color: #0b0c16;
+            --card-bg: rgba(22, 24, 47, 0.6);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-color: #f1f3f9;
+            --text-muted: #8b92b6;
+            --primary: #5865f2;
+            --primary-glow: rgba(88, 101, 242, 0.3);
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.2);
+            --danger: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.2);
+            --warning: #f59e0b;
+            --warning-glow: rgba(245, 158, 11, 0.2);
+            --accent: #d946ef;
+            --accent-glow: rgba(217, 70, 239, 0.2);
+            --console-bg: #05060f;
+            --font-main: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(88, 101, 242, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(217, 70, 239, 0.06) 0%, transparent 45%);
+            background-attachment: fixed;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 2.5rem;
+            background: rgba(11, 12, 22, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--card-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-section i {
+            font-size: 1.75rem;
+            color: var(--primary);
+            filter: drop-shadow(0 0 8px var(--primary));
+        }
+
+        .logo-section h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 30%, #8b92b6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 0.5px;
+        }
+
+        .system-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.4rem 0.8rem;
+            border-radius: 9999px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .system-status.checking {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--warning);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .system-status .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            box-shadow: 0 0 8px currentColor;
+            animation: pulse 1.8s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.6; }
+            50% { transform: scale(1.15); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.6; }
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 1.5rem;
+            padding: 2rem 2.5rem;
+            flex-grow: 1;
+            max-width: 1600px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 1024px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #fff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.75rem;
+        }
+
+        .card-title i {
+            color: var(--primary);
+        }
+
+        /* Form Controls */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-group input, .form-group select {
+            background: rgba(5, 6, 15, 0.7);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            color: #fff;
+            font-family: var(--font-main);
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        /* Preset Buttons */
+        .presets-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.5rem;
+        }
+
+        .preset-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 0.6rem 1rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .preset-btn:hover, .preset-btn.active {
+            background: rgba(88, 101, 242, 0.1);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        .preset-btn i {
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            color: var(--primary);
+        }
+
+        .preset-btn.active i {
+            opacity: 1;
+        }
+
+        /* Operations Grid */
+        .workspace-grid {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 1.5rem;
+        }
+
+        .operations-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .op-card {
+            background: rgba(22, 24, 47, 0.4);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .op-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--primary);
+            opacity: 0.6;
+        }
+
+        .op-card.sync-card::before { background: var(--accent); }
+        .op-card.validate-card::before { background: var(--warning); }
+        .op-card.deploy-card::before { background: var(--primary); }
+        .op-card.rollback-card::before { background: var(--danger); }
+        .op-card.status-card::before { background: var(--success); }
+
+        .op-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.12);
+            background: rgba(22, 24, 47, 0.55);
+        }
+
+        .op-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .op-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .op-header i {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+        }
+
+        .sync-card .op-header i { color: var(--accent); }
+        .validate-card .op-header i { color: var(--warning); }
+        .deploy-card .op-header i { color: var(--primary); }
+        .rollback-card .op-header i { color: var(--danger); }
+        .status-card .op-header i { color: var(--success); }
+
+        .op-desc {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Action Buttons */
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.7rem 1.25rem;
+            font-family: var(--font-main);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .btn:hover:not(:disabled) {
+            filter: brightness(1.15);
+            box-shadow: 0 4px 12px var(--primary-glow);
+        }
+
+        .btn:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-sync { background: var(--accent); }
+        .btn-sync:hover:not(:disabled) { box-shadow: 0 4px 12px var(--accent-glow); }
+        .btn-validate { background: var(--warning); color: #000; }
+        .btn-validate:hover:not(:disabled) { box-shadow: 0 4px 12px var(--warning-glow); }
+        .btn-rollback { background: var(--danger); }
+        .btn-rollback:hover:not(:disabled) { box-shadow: 0 4px 12px var(--danger-glow); }
+        .btn-status { background: var(--success); }
+        .btn-status:hover:not(:disabled) { box-shadow: 0 4px 12px var(--success-glow); }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            user-select: none;
+            font-size: 0.85rem;
+            color: var(--text-color);
+        }
+
+        .checkbox-container input {
+            cursor: pointer;
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Console Section */
+        .console-container {
+            background: var(--console-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            grid-column: 1 / -1;
+            height: 380px;
+        }
+
+        .console-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1.25rem;
+            background: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .console-title {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .console-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .console-action-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: color 0.2s ease;
+        }
+
+        .console-action-btn:hover {
+            color: #fff;
+        }
+
+        .console-body {
+            flex-grow: 1;
+            padding: 1.25rem;
+            overflow-y: auto;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.1);
+            border-radius: 99px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .log-entry {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            padding: 0.5rem;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.01);
+            border-left: 3px solid var(--text-muted);
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .log-entry.info { border-left-color: var(--primary); }
+        .log-entry.success { border-left-color: var(--success); background: rgba(16, 185, 129, 0.02); }
+        .log-entry.error { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.02); }
+        .log-entry.warning { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.02); }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        .log-content {
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-json {
+            margin-top: 0.4rem;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 0.6rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            border: 1px solid rgba(255,255,255,0.03);
+            color: #a5b4fc;
+            overflow-x: auto;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--card-border);
+            margin-top: auto;
+            background: rgba(11, 12, 22, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React and Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- React Code -->
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            // Preset Hosts Configuration
+            const hostPresets = [
+                {
+                    id: 'mock',
+                    name: 'Local Mock (wazuh_managers)',
+                    ip: '127.0.0.1',
+                    user: 'root',
+                    keyPath: ""
+                },
+                {
+                    id: 'prod',
+                    name: 'Production Wazuh Manager',
+                    ip: '10.21.232.220',
+                    user: 'waserver',
+                    keyPath: "/app/wazuh_ansible_key"
+                },
+                {
+                    id: 'stage',
+                    name: 'Staging Wazuh Manager',
+                    ip: '192.168.10.160',
+                    user: 'waserver',
+                    keyPath: "/app/wazuh_ansible_key"
+                }
+            ];
+
+            // Host State
+            const [selectedPreset, setSelectedPreset] = useState('mock');
+            const [hostName, setHostName] = useState(hostPresets[0].name);
+            const [hostIp, setHostIp] = useState(hostPresets[0].ip);
+            const [sshUser, setSshUser] = useState(hostPresets[0].user);
+            const [sshKeyPath, setSshKeyPath] = useState(hostPresets[0].keyPath);
+
+            // Operation states
+            const [syncSince, setSyncSince] = useState('');
+            const [mispProvider, setMispProvider] = useState('mock');
+            const [validateDir, setValidateDir] = useState('/app/repository/rules');
+            const [deployDryRun, setDeployDryRun] = useState(true);
+            const [deployTags, setDeployTags] = useState('');
+            const [rollbackTag, setRollbackTag] = useState('');
+
+            // App State
+            const [logs, setLogs] = useState([]);
+            const [isRunning, setIsRunning] = useState(false);
+            const [activeTool, setActiveTool] = useState(null);
+            const [serverStatus, setServerStatus] = useState('checking');
+
+            const consoleEndRef = useRef(null);
+
+            // Helper to add log entries
+            const addLog = (type, message, details = null) => {
+                const newLog = {
+                    id: Date.now() + Math.random(),
+                    timestamp: new Date().toLocaleTimeString(),
+                    type,
+                    message,
+                    details
+                };
+                setLogs(prev => [...prev, newLog]);
+            };
+
+            // Clear logs
+            const clearLogs = () => {
+                setLogs([]);
+                addLog('info', 'Console logs cleared.');
+            };
+
+            // Check API server health
+            const checkHealth = async () => {
+                try {
+                    setServerStatus('checking');
+                    const res = await fetch('/status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            manager_host: 'healthcheck_probe',
+                            host_ip: '127.0.0.1',
+                            ssh_user: 'root',
+                            ssh_key_path: '/dev/null'
+                        })
+                    });
+                    if (res.ok) {
+                        setServerStatus('connected');
+                    } else {
+                        setServerStatus('error');
+                    }
+                } catch (e) {
+                    setServerStatus('error');
+                }
+            };
+
+            useEffect(() => {
+                addLog('info', 'Detection pipeline dashboard loaded. Ready for actions.');
+                checkHealth();
+                const interval = setInterval(checkHealth, 15000);
+                return () => clearInterval(interval);
+            }, []);
+
+            // Scroll to bottom of console
+            useEffect(() => {
+                if (consoleEndRef.current) {
+                    consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+                }
+            }, [logs]);
+
+            // Handle Preset Selection
+            const handlePresetChange = (presetId) => {
+                const preset = hostPresets.find(p => p.id === presetId);
+                if (preset) {
+                    setSelectedPreset(presetId);
+                    setHostName(preset.name);
+                    setHostIp(preset.ip);
+                    setSshUser(preset.user);
+                    setSshKeyPath(preset.keyPath);
+                    addLog('info', `Configured host preset: ${preset.name}`);
+                }
+            };
+
+            // Run Tool Integration
+            const runTool = async (toolId, opts = {}) => {
+                if (isRunning) return;
+                
+                setIsRunning(true);
+                setActiveTool(toolId);
+                addLog('info', `Starting tool invocation: ${toolId.toUpperCase()}...`);
+
+                const activeHost = {
+                    name: hostName,
+                    ip: hostIp,
+                    user: sshUser,
+                    keyPath: sshKeyPath
+                };
+                const misp = mispProvider;
+
+                try {
+                    const endpointMap = {
+                        sync:     { url: "/sync",     body: { since: opts.since || null, misp_provider: misp } },
+                        validate: { url: "/validate", body: { rule_dir: opts.dir } },
+                        deploy:   { url: "/deploy",   body: { dry_run: opts.dryRun, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath, tags: opts.tags || [] } },
+                        rollback: { url: "/rollback", body: { tag: opts.tag,        host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
+                        status:   { url: "/status",   body: { manager_host: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
+                    };
+
+                    const { url, body } = endpointMap[toolId];
+                    
+                    addLog('info', `HTTP POST ${url}`, body);
+
+                    const res = await fetch(url, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body)
+                    });
+
+                    if (!res.ok) {
+                        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+                    }
+
+                    const data = await res.json();
+                    
+                    // Interpret output status
+                    const isSuccess = data.status === "ok" || data.status === "committed" || data.status === "no_changes" || data.valid_count !== undefined || data.wazuh_running !== undefined;
+                    
+                    if (isSuccess) {
+                        addLog('success', `Tool completed successfully.`, data);
+                        
+                        // If it is status query, logs can display wazuh status specifically
+                        if (toolId === 'status') {
+                            addLog('success', `Wazuh service: ${data.wazuh_running ? 'RUNNING' : 'STOPPED'} | Yara rules: ${data.yara_rules_count} | Wazuh rules: ${data.wazuh_rules_count}`);
+                            if (data.last_deployment_tag) {
+                                setRollbackTag(data.last_deployment_tag);
+                            }
+                        }
+                        if (toolId === 'deploy' && data.deploy_tag) {
+                            setRollbackTag(data.deploy_tag);
+                        }
+                    } else {
+                        addLog('error', `Tool failed. Status: ${data.status || 'unknown error'}`, data);
+                    }
+
+                } catch (error) {
+                    addLog('error', `Request exception: ${error.message}`);
+                } finally {
+                    setIsRunning(false);
+                    setActiveTool(null);
+                }
+            };
+
+            return (
+                <React.Fragment>
+                    <header>
+                        <div className="logo-section">
+                            <i className="fa-solid fa-shield-halved"></i>
+                            <h1>Wazuh Detection Pipeline Orchestrator</h1>
+                        </div>
+                        <div className={`system-status ${serverStatus === 'checking' ? 'checking' : ''}`}>
+                            <div className="pulse-dot"></div>
+                            {serverStatus === 'connected' && 'API Server: Connected'}
+                            {serverStatus === 'checking' && 'API Server: Checking...'}
+                            {serverStatus === 'error' && 'API Server: Disconnected'}
+                        </div>
+                    </header>
+
+                    <div className="main-container">
+                        {/* Host Config Column */}
+                        <div className="card">
+                            <div className="card-title">
+                                <i className="fa-solid fa-server"></i>
+                                Active Host Configuration
+                            </div>
+
+                            <div className="presets-grid">
+                                <label style={{fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase'}}>Manager Preset</label>
+                                {hostPresets.map(preset => (
+                                    <button 
+                                        key={preset.id} 
+                                        className={`preset-btn ${selectedPreset === preset.id ? 'active' : ''}`}
+                                        onClick={() => handlePresetChange(preset.id)}
+                                    >
+                                        <span>{preset.id === 'mock' ? '🔧 ' : '🖥️ '}{preset.id.toUpperCase()}</span>
+                                        <i className="fa-solid fa-circle-check"></i>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="form-group">
+                                <label>Host Name</label>
+                                <input 
+                                    type="text" 
+                                    value={hostName} 
+                                    onChange={(e) => { setHostName(e.target.value); setSelectedPreset(''); }} 
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label>Ansible Host IP</label>
+                                <input 
+                                    type="text" 
+                                    value={hostIp} 
+                                    onChange={(e) => { setHostIp(e.target.value); setSelectedPreset(''); }} 
+                                />
+                            </div>
+
+                            <div className="form-row">
+                                <div className="form-group">
+                                    <label>SSH User</label>
+                                    <input 
+                                        type="text" 
+                                        value={sshUser} 
+                                        onChange={(e) => { setSshUser(e.target.value); setSelectedPreset(''); }} 
+                                    />
+                                </div>
+                                <div className="form-group">
+                                    <label>MISP Provider</label>
+                                    <select 
+                                        value={mispProvider} 
+                                        onChange={(e) => setMispProvider(e.target.value)}
+                                    >
+                                        <option value="mock">Mock</option>
+                                        <option value="real">Real MISP</option>
+                                        <option value="">Default (Env)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="form-group">
+                                <label style={{display:"none"}}>SSH Private Key Path</label>
+                                <input 
+                                    type="text" 
+                                    value={sshKeyPath} 
+                                    onChange={(e) => { setSshKeyPath(e.target.value); setSelectedPreset(''); }} 
+                                />
+                            </div>
+
+                            <button 
+                                className="btn btn-status"
+                                disabled={isRunning}
+                                onClick={() => runTool('status')}
+                            >
+                                {isRunning && activeTool === 'status' ? (
+                                    <i className="fa-solid fa-spinner loading-spinner"></i>
+                                ) : (
+                                    <i className="fa-solid fa-network-wired"></i>
+                                )}
+                                Query Manager Status
+                            </button>
+                        </div>
+
+                        {/* Operations Control Panel Column */}
+                        <div className="workspace-grid">
+                            <div className="operations-panel">
+                                {/* Sync MISP Rules */}
+                                <div className="op-card sync-card">
+                                    <div className="op-header">
+                                        <h3>Sync MISP Rules</h3>
+                                        <i className="fa-solid fa-cloud-arrow-down"></i>
+                                    </div>
+                                    <div className="op-desc">
+                                        Ingest threat intelligence rules from MISP, assign Wazuh rule IDs, and commit to the dev/main branch.
+                                    </div>
+                                    <div className="form-group" style={{marginTop: 'auto'}}>
+                                        <label>Since Date (Optional)</label>
+                                        <input 
+                                            type="datetime-local" 
+                                            value={syncSince} 
+                                            onChange={(e) => setSyncSince(e.target.value)} 
+                                        />
+                                    </div>
+                                    <button 
+                                        className="btn btn-sync"
+                                        disabled={isRunning}
+                                        onClick={() => runTool('sync', { since: syncSince })}
+                                    >
+                                        {isRunning && activeTool === 'sync' ? (
+                                            <i className="fa-solid fa-spinner loading-spinner"></i>
+                                        ) : (
+                                            <i className="fa-solid fa-rotate"></i>
+                                        )}
+                                        Run Ingestion
+                                    </button>
+                                </div>
+
+                                {/* Validate Rules */}
+                                <div className="op-card validate-card">
+                                    <div className="op-header">
+                                        <h3>Validate Rules</h3>
+                                        <i className="fa-solid fa-clipboard-check"></i>
+                                    </div>
+                                    <div className="op-desc">
+                                        Run automated checkers (YARA engine, Sigma validators, Wazuh rule analyzers) over rule files.
+                                    </div>
+                                    <div className="form-group" style={{marginTop: 'auto'}}>
+                                        <label>Rule Directory</label>
+                                        <input 
+                                            type="text" 
+                                            value={validateDir} 
+                                            onChange={(e) => setValidateDir(e.target.value)} 
+                                        />
+                                    </div>
+                                    <button 
+                                        className="btn btn-validate"
+                                        disabled={isRunning}
+                                        onClick={() => runTool('validate', { dir: validateDir })}
+                                    >
+                                        {isRunning && activeTool === 'validate' ? (
+                                            <i className="fa-solid fa-spinner loading-spinner"></i>
+                                        ) : (
+                                            <i className="fa-solid fa-check-double"></i>
+                                        )}
+                                        Validate Ruleset
+                                    </button>
+                                </div>
+
+                                {/* Deploy Rules */}
+                                <div className="op-card deploy-card">
+                                    <div className="op-header">
+                                        <h3>Deploy Rules</h3>
+                                        <i className="fa-solid fa-rocket"></i>
+                                    </div>
+                                    <div className="op-desc">
+                                        Deploy validated Wazuh rulesets and YARA threat feeds to the target manager via Ansible playbooks.
+                                    </div>
+                                    <div className="form-group" style={{marginTop: 'auto'}}>
+                                        <label>Filter by Tags (comma-separated, optional)</label>
+                                        <input
+                                            type="text"
+                                            placeholder="tlp:white, critical"
+                                            value={deployTags}
+                                            onChange={(e) => setDeployTags(e.target.value)}
+                                        />
+                                    </div>
+                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                        <label className="checkbox-container">
+                                            <input
+                                                type="checkbox"
+                                                checked={deployDryRun}
+                                                onChange={(e) => setDeployDryRun(e.target.checked)}
+                                            />
+                                            Ansible Dry Run (Check mode)
+                                        </label>
+                                    </div>
+                                    <button
+                                        className="btn"
+                                        disabled={isRunning}
+                                        onClick={() => runTool('deploy', {
+                                            dryRun: deployDryRun,
+                                            tags: deployTags.split(',').map(t => t.trim()).filter(Boolean)
+                                        })}
+                                    >
+                                        {isRunning && activeTool === 'deploy' ? (
+                                            <i className="fa-solid fa-spinner loading-spinner"></i>
+                                        ) : (
+                                            <i className="fa-solid fa-arrow-up-right-from-square"></i>
+                                        )}
+                                        Deploy to Host
+                                    </button>
+                                </div>
+
+                                {/* Rollback Rules */}
+                                <div className="op-card rollback-card">
+                                    <div className="op-header">
+                                        <h3>Rollback Rules</h3>
+                                        <i className="fa-solid fa-history"></i>
+                                    </div>
+                                    <div className="op-desc">
+                                        Revert managers and codebase rulesets to a previously saved deployment git tag manifest.
+                                    </div>
+                                    <div className="form-group" style={{marginTop: 'auto'}}>
+                                        <label>Target Git Tag</label>
+                                        <input 
+                                            type="text" 
+                                            placeholder="deploy-rules-YYYYMMDD-HHMMSS" 
+                                            value={rollbackTag} 
+                                            onChange={(e) => setRollbackTag(e.target.value)} 
+                                        />
+                                    </div>
+                                    <button 
+                                        className="btn btn-rollback"
+                                        disabled={isRunning || !rollbackTag}
+                                        onClick={() => runTool('rollback', { tag: rollbackTag })}
+                                    >
+                                        {isRunning && activeTool === 'rollback' ? (
+                                            <i className="fa-solid fa-spinner loading-spinner"></i>
+                                        ) : (
+                                            <i className="fa-solid fa-backward"></i>
+                                        )}
+                                        Rollback Ruleset
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Console output widget */}
+                            <div className="console-container">
+                                <div className="console-header">
+                                    <div className="console-title">
+                                        <i className="fa-solid fa-terminal"></i>
+                                        Pipelines Operations Terminal Logs
+                                    </div>
+                                    <div className="console-actions">
+                                        <button className="console-action-btn" onClick={clearLogs} title="Clear Console">
+                                            <i className="fa-solid fa-trash-can"></i>
+                                        </button>
+                                        <button className="console-action-btn" onClick={checkHealth} title="Force Healthcheck">
+                                            <i className="fa-solid fa-arrows-rotate"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="console-body">
+                                    {logs.map(log => (
+                                        <div key={log.id} className={`log-entry ${log.type}`}>
+                                            <div className="log-header">
+                                                <span>[{log.timestamp}] {log.type.toUpperCase()}</span>
+                                            </div>
+                                            <div className="log-content">{log.message}</div>
+                                            {log.details && (
+                                                <pre className="log-json">
+                                                    {JSON.stringify(log.details, null, 2)}
+                                                </pre>
+                                            )}
+                                        </div>
+                                    ))}
+                                    <div ref={consoleEndRef} />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <footer>
+                        &copy; 2026 Wazuh Detection Rules Orchestrator. Powered by FastAPI & MCP.
+                    </footer>
+                </React.Fragment>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
 </file>
 
 <file path="processors/__init__.py">
@@ -7988,6 +7948,76 @@ ruff>=0.1.0
 sigma-cli>=0.10.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
+</file>
+
+<file path="ansible/deploy_rules_docker.yml">
+---
+- name: Deploy Detection Rules to Wazuh Docker
+  hosts: wazuh_managers
+  serial: 1
+  vars:
+    wazuh_docker_dir: "~/wazuh-docker/multi-node"
+    wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
+    wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
+    container_name: "multi-node-wazuh.master-1"
+    local_rules_src: "../repository/generated/local_rules.xml"
+
+  tasks:
+    - name: Set local mock directory paths if mock enabled
+      set_fact:
+        target_rules_dir: "{{ playbook_dir }}/../mock_wazuh/etc/rules"
+        target_yara_dir: "{{ playbook_dir }}/../mock_wazuh/opt/yara-rules"
+      when: is_local_mock | default(false) | bool
+
+    - name: Set actual directory paths if mock disabled
+      set_fact:
+        target_rules_dir: "{{ wazuh_rules_host_dir }}"
+        target_yara_dir: "{{ wazuh_yara_host_dir }}"
+      when: not (is_local_mock | default(false) | bool)
+
+    - name: Ensure rules directory exists on host
+      file:
+        path: "{{ target_rules_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure YARA directory exists on host
+      file:
+        path: "{{ target_yara_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Sync compiled Wazuh rules to host volume
+      copy:
+        src: "{{ local_rules_src }}"
+        dest: "{{ target_rules_dir }}/local_rules.xml"
+        mode: "0644"
+      register: copy_wazuh_rules
+
+    - name: Sync YARA rules to host volume
+      copy:
+        src: ../repository/rules/yara/
+        dest: "{{ target_yara_dir }}/"
+        mode: "0644"
+      register: copy_yara_rules
+
+    - name: Restart Wazuh master container
+      command: "docker restart {{ container_name }}"
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
+
+    - name: Verify container is running after restart
+      check_mode: no
+      command: "docker ps --filter name={{ container_name }} --format '{{ '{{' }} .Status {{ '}}' }}'"
+      register: container_status
+      retries: 5
+      delay: 10
+      until: "'Up' in container_status.stdout"
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
+
+    - name: Show container status
+      debug:
+        msg: "Wazuh master container status: {{ container_status.stdout }}"
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
 </file>
 
 <file path="repository/.sync_state.json">
