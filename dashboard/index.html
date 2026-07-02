@@ -560,14 +560,14 @@
                     name: 'Production Wazuh Manager',
                     ip: '10.21.232.220',
                     user: 'waserver',
-                    keyPath: ""
+                    keyPath: "/app/wazuh_ansible_key"
                 },
                 {
                     id: 'stage',
                     name: 'Staging Wazuh Manager',
                     ip: '192.168.10.160',
                     user: 'waserver',
-                    keyPath: ""
+                    keyPath: "/app/wazuh_ansible_key"
                 }
             ];
 
@@ -583,6 +583,7 @@
             const [mispProvider, setMispProvider] = useState('mock');
             const [validateDir, setValidateDir] = useState('/app/repository/rules');
             const [deployDryRun, setDeployDryRun] = useState(true);
+            const [deployTags, setDeployTags] = useState('');
             const [rollbackTag, setRollbackTag] = useState('');
 
             // App State
@@ -682,7 +683,7 @@
                     const endpointMap = {
                         sync:     { url: "/sync",     body: { since: opts.since || null, misp_provider: misp } },
                         validate: { url: "/validate", body: { rule_dir: opts.dir } },
-                        deploy:   { url: "/deploy",   body: { dry_run: opts.dryRun, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
+                        deploy:   { url: "/deploy",   body: { dry_run: opts.dryRun, host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath, tags: opts.tags || [] } },
                         rollback: { url: "/rollback", body: { tag: opts.tag,        host_name: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
                         status:   { url: "/status",   body: { manager_host: activeHost.name, host_ip: activeHost.ip, ssh_user: activeHost.user, ssh_key_path: activeHost.keyPath } },
                     };
@@ -905,20 +906,32 @@
                                     <div className="op-desc">
                                         Deploy validated Wazuh rulesets and YARA threat feeds to the target manager via Ansible playbooks.
                                     </div>
-                                    <div style={{marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                                    <div className="form-group" style={{marginTop: 'auto'}}>
+                                        <label>Filter by Tags (comma-separated, optional)</label>
+                                        <input
+                                            type="text"
+                                            placeholder="tlp:white, critical"
+                                            value={deployTags}
+                                            onChange={(e) => setDeployTags(e.target.value)}
+                                        />
+                                    </div>
+                                    <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
                                         <label className="checkbox-container">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={deployDryRun} 
-                                                onChange={(e) => setDeployDryRun(e.target.checked)} 
+                                            <input
+                                                type="checkbox"
+                                                checked={deployDryRun}
+                                                onChange={(e) => setDeployDryRun(e.target.checked)}
                                             />
                                             Ansible Dry Run (Check mode)
                                         </label>
                                     </div>
-                                    <button 
+                                    <button
                                         className="btn"
                                         disabled={isRunning}
-                                        onClick={() => runTool('deploy', { dryRun: deployDryRun })}
+                                        onClick={() => runTool('deploy', {
+                                            dryRun: deployDryRun,
+                                            tags: deployTags.split(',').map(t => t.trim()).filter(Boolean)
+                                        })}
                                     >
                                         {isRunning && activeTool === 'deploy' ? (
                                             <i className="fa-solid fa-spinner loading-spinner"></i>
