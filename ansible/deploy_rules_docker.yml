@@ -7,6 +7,7 @@
     wazuh_rules_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/rules"
     wazuh_yara_host_dir: "{{ wazuh_docker_dir }}/config/wazuh_manager/yara-rules"
     container_name: "multi-node-wazuh.master-1"
+    local_rules_src: "../repository/generated/local_rules.xml"
 
   tasks:
     - name: Ensure rules directory exists on host
@@ -23,7 +24,7 @@
 
     - name: Sync compiled Wazuh rules to host volume
       copy:
-        src: ../repository/generated/local_rules.xml
+        src: "{{ local_rules_src }}"
         dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
         mode: "0644"
       register: copy_wazuh_rules

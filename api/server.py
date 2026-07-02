@@ -25,6 +25,8 @@ class DeployReq(BaseModel):
     host_ip: str = ""
     ssh_user: str = ""
     ssh_key_path: str = ""
+    rule_names: list[str] = []
+    tags: list[str] = []
 
 class RollbackReq(BaseModel):
     tag: str
@@ -52,7 +54,8 @@ def api_validate(req: ValidateReq):
 @app.post("/deploy")
 def api_deploy(req: DeployReq):
     r = deploy_rules(dry_run=req.dry_run, host_name=req.host_name,
-                     host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path)
+                     host_ip=req.host_ip, ssh_user=req.ssh_user, ssh_key_path=req.ssh_key_path,
+                     rule_names=req.rule_names or None, tags=req.tags or None)
     return vars(r)
 
 @app.post("/rollback")

@@ -54,7 +54,7 @@ def e2e_rules_env(tmp_path, monkeypatch):
     repo.create_tag("last_known_good", message="Baseline valid ruleset")
 
     # Copy ansible folder to tmp_path
-    shutil.copytree("/home/kali/Desktop/misp/ansible", tmp_path / "ansible")
+    shutil.copytree("/home/rpi/misp/ansible", tmp_path / "ansible")
 
     # Override inventory to use localhost with local connection to avoid SSH timeouts
     inventory_path = tmp_path / "ansible" / "inventory.ini"
@@ -99,7 +99,7 @@ def e2e_rules_env(tmp_path, monkeypatch):
     monkeypatch.setenv("ANSIBLE_INVENTORY", str(tmp_path / "ansible" / "inventory.ini"))
 
     # Prepend virtual env bin directory to PATH for subprocess calls to ansible-playbook
-    venv_bin = "/home/kali/Desktop/misp/.venv/bin"
+    venv_bin = "/home/rpi/misp/.venv/bin"
     monkeypatch.setenv("PATH", f"{venv_bin}:{os.environ.get('PATH', '')}")
 
     # Patch MockMISPRuleProvider to point to our temp fixture

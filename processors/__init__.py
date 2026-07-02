@@ -102,6 +102,7 @@ def process_pending_rules(
                 event_uuid=rule.event_uuid,
                 validation_result=result,
                 content_hash=compute_hash(rule.content),
+                tags=rule.tags,
             )
             continue
 
@@ -151,6 +152,7 @@ def process_pending_rules(
             converted=converted,
             conversion_target=conversion_target,
             content_hash=content_hash,
+            tags=rule.tags,
         )
 
     # Rebuild all rules into generated/local_rules.xml

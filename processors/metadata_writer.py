@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import structlog
 
@@ -21,6 +21,7 @@ def write_rule_metadata(
     converted: bool = False,
     conversion_target: Optional[str] = None,
     content_hash: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ) -> Path:
     """
     Write a JSON metadata document recording the lifecycle of a rule.
@@ -57,6 +58,7 @@ def write_rule_metadata(
         "validation_warnings": validation_result.warnings,
         "conversion_status": "converted" if converted else "none",
         "conversion_target": conversion_target,
+        "tags": tags or [],
         "deployment_status": "pending",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

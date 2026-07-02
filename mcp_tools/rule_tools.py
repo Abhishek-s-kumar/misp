@@ -299,6 +299,8 @@ def deploy_rules(
     host_ip: str = "",
     ssh_user: str = "",
     ssh_key_path: str = "",
+    rule_names=None,
+    tags=None,
 ) -> DeployResult:
     """
     Deploy validated rules to Wazuh managers via Ansible.
@@ -329,10 +331,18 @@ def deploy_rules(
         vault_pass_file = os.getenv("ANSIBLE_VAULT_PASSWORD_FILE", "ansible/.vault_pass")
         is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
 
+        deploy_src_file = Path(repo_path).resolve() / "generated" / "local_rules.xml"
+        if rule_names or tags:
+            from processors.xml_merger import build_filtered_rules_xml
+            filtered_xml = build_filtered_rules_xml(rules_dir, rule_names=set(rule_names) if rule_names else None, tags=set(tags) if tags else None)
+            deploy_src_file = Path(repo_path).resolve() / "generated" / "deploy_filtered.xml"
+            deploy_src_file.write_text(filtered_xml, encoding="utf-8")
+
         cmd = [
             "ansible-playbook",
             "ansible/deploy_rules_docker.yml",
-            "-i", inventory
+            "-i", inventory,
+            "-e", f"local_rules_src={deploy_src_file}"
         ]
 
         if is_local_mock:

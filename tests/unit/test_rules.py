@@ -401,7 +401,7 @@ class TestCheckRuleIds(unittest.TestCase):
         import importlib.util, sys
         spec = importlib.util.spec_from_file_location(
             "check_rule_ids",
-            Path("/home/kali/Desktop/misp/DaC/check_rule_ids.py"),
+            Path("/home/rpi/misp/DaC/check_rule_ids.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

@@ -235,3 +235,43 @@ def rebuild_local_rules(rules_dir: Path):
     output_file = generated_dir / "local_rules.xml"
     output_file.write_text(merged_xml, encoding="utf-8")
     log.info("rebuild_local_rules_success", output_file=str(output_file))
+
+
+def build_filtered_rules_xml(rules_dir: Path, rule_names=None, tags=None) -> str:
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+    cache_dir = rules_dir.parent / "generated" / "conversion_cache"
+    def _matches(fname: str) -> bool:
+        if rule_names is None and tags is None:
+            return True
+        if rule_names and fname in rule_names:
+            return True
+        if tags:
+            meta_file = metadata_dir / f"{Path(fname).stem}.json"
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    if set(meta.get("tags", [])) & tags:
+                        return True
+                except Exception:
+                    pass
+        return False
+    xml_parts = []
+    wazuh_dir = rules_dir / "wazuh"
+    if wazuh_dir.exists():
+        for f in sorted(wazuh_dir.glob("*.xml")):
+            if _matches(f.name):
+                xml_parts.append(f.read_text(encoding="utf-8"))
+    sigma_dir = rules_dir / "sigma"
+    if sigma_dir.exists():
+        for f in sorted(list(sigma_dir.glob("*.yml")) + list(sigma_dir.glob("*.yaml"))):
+            if not _matches(f.name):
+                continue
+            data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            custom = data.get("custom", {})
+            wazuh_rule_id = custom.get("wazuh_rule_id") if isinstance(custom, dict) else None
+            if not wazuh_rule_id:
+                continue
+            cache_file = cache_dir / f"{f.stem}.xml"
+            wazuh_xml = cache_file.read_text(encoding="utf-8") if cache_file.exists() else convert_sigma_to_wazuh(f.read_text(encoding="utf-8"), f.name)
+            xml_parts.append(override_xml_rule_ids(wazuh_xml, wazuh_rule_id))
+    return merge_wazuh_xml_files(xml_parts)
