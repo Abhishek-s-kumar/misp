@@ -10,35 +10,47 @@
     local_rules_src: "../repository/generated/local_rules.xml"
 
   tasks:
+    - name: Set local mock directory paths if mock enabled
+      set_fact:
+        target_rules_dir: "{{ playbook_dir }}/../mock_wazuh/etc/rules"
+        target_yara_dir: "{{ playbook_dir }}/../mock_wazuh/opt/yara-rules"
+      when: is_local_mock | default(false) | bool
+
+    - name: Set actual directory paths if mock disabled
+      set_fact:
+        target_rules_dir: "{{ wazuh_rules_host_dir }}"
+        target_yara_dir: "{{ wazuh_yara_host_dir }}"
+      when: not (is_local_mock | default(false) | bool)
+
     - name: Ensure rules directory exists on host
       file:
-        path: "{{ wazuh_rules_host_dir }}"
+        path: "{{ target_rules_dir }}"
         state: directory
         mode: "0755"
 
     - name: Ensure YARA directory exists on host
       file:
-        path: "{{ wazuh_yara_host_dir }}"
+        path: "{{ target_yara_dir }}"
         state: directory
         mode: "0755"
 
     - name: Sync compiled Wazuh rules to host volume
       copy:
         src: "{{ local_rules_src }}"
-        dest: "{{ wazuh_rules_host_dir }}/local_rules.xml"
+        dest: "{{ target_rules_dir }}/local_rules.xml"
         mode: "0644"
       register: copy_wazuh_rules
 
     - name: Sync YARA rules to host volume
       copy:
         src: ../repository/rules/yara/
-        dest: "{{ wazuh_yara_host_dir }}/"
+        dest: "{{ target_yara_dir }}/"
         mode: "0644"
       register: copy_yara_rules
 
     - name: Restart Wazuh master container
       command: "docker restart {{ container_name }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
 
     - name: Verify container is running after restart
       check_mode: no
@@ -47,9 +59,9 @@
       retries: 5
       delay: 10
       until: "'Up' in container_status.stdout"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
 
     - name: Show container status
       debug:
         msg: "Wazuh master container status: {{ container_status.stdout }}"
-      when: copy_wazuh_rules.changed or copy_yara_rules.changed
+      when: not (is_local_mock | default(false) | bool) and (copy_wazuh_rules.changed or copy_yara_rules.changed)
