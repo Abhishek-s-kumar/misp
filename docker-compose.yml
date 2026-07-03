@@ -10,6 +10,7 @@ services:
       - ./ansible:/app/ansible
       - ./wazuh_ansible_key:/app/wazuh_ansible_key:ro
       - ./.vault_pass:/app/.vault_pass:ro
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     entrypoint: ["/app/entrypoint.sh"]
     env_file:
       - .env

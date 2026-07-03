@@ -28,5 +28,5 @@ RUN cd /app/repository && git init && git checkout -b main 2>/dev/null || true
 EXPOSE 9640
 
 CMD ["python", "api/server.py"]
-RUN git config --global user.email "misp-pipeline@local" && \
-    git config --global user.name "MISP Pipeline"
+RUN git config --system user.email "misp-pipeline@local" && \
+    git config --system user.name "MISP Pipeline"
