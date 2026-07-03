@@ -657,10 +657,9 @@ def sync_github_rules() -> SyncResult:
         github_state[src.repo] = head_sha
         all_raw_rules.extend(raw_rules)
 
-    _save_github_state(repo_dir, github_state)
-
     if not all_raw_rules:
         repo = Repo(repo_dir)
+        _save_github_state(repo_dir, github_state)
         return SyncResult(status="no_changes", total_pulled=0, approved=0, rejected=0, duplicated=0, converted=0, commit_sha=repo.head.commit.hexsha)
 
     stats = process_pending_rules(all_raw_rules, rules_dir=rules_dir)
@@ -691,6 +690,8 @@ def sync_github_rules() -> SyncResult:
                 repo.remotes.origin.push("main")
         except Exception as e:
             log.warning("git_push_github_rules_failed", error=str(e))
+
+    _save_github_state(repo_dir, github_state)
 
     return SyncResult(
         status="committed" if commit_sha else "no_changes",
