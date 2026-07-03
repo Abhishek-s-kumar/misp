@@ -31,3 +31,4 @@ wazuh_ansible_key.pub
 
 # Ansible Vault password
 .vault_pass
+repository/
