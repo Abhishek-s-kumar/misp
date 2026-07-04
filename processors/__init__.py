@@ -9,6 +9,7 @@ Pipeline steps:
   5. Write metadata to metadata/.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Any
@@ -28,7 +29,7 @@ from processors.xml_merger import (
 
 log = structlog.get_logger()
 
-__all__ = ["process_pending_rules"]
+__all__ = ["process_pending_rules", "promote_quarantined_rule", "list_quarantined_rules"]
 
 
 def process_pending_rules(
@@ -190,3 +191,86 @@ def process_pending_rules(
     rebuild_local_rules(rules_dir)
 
     return stats
+
+
+def list_quarantined_rules(rules_dir: Path) -> list:
+    """
+    Return metadata for every rule currently sitting in quarantine, across all types.
+    """
+    quarantine_dir = rules_dir.parent / "generated" / "quarantine"
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+    results = []
+    for rule_type in ("sigma", "yara", "wazuh"):
+        type_dir = quarantine_dir / rule_type
+        if not type_dir.exists():
+            continue
+        for rule_file in type_dir.iterdir():
+            if not rule_file.is_file():
+                continue
+            base = rule_file.name.rsplit(".", 1)[0] if "." in rule_file.name else rule_file.name
+            meta_file = metadata_dir / f"{base}.json"
+            entry = {"rule_name": rule_file.name, "rule_type": rule_type}
+            if meta_file.exists():
+                try:
+                    entry.update(json.loads(meta_file.read_text(encoding="utf-8")))
+                except Exception as e:
+                    log.warning("quarantine_metadata_read_failed", file=str(meta_file), error=str(e))
+            results.append(entry)
+    return results
+
+
+def promote_quarantined_rule(rule_name: str, rules_dir: Path) -> Dict[str, Any]:
+    """
+    Move a manually-reviewed rule out of quarantine into the real approved directory,
+    assign IDs if needed, update its metadata, and rebuild generated/local_rules.xml
+    so the promotion actually takes effect.
+
+    Args:
+        rule_name: filename of the rule (as it appears under generated/quarantine/<type>/).
+        rules_dir: path to repository/rules/ (contains sigma/, yara/, wazuh/).
+
+    Returns:
+        dict with "status": "ok" | "not_found" | "error", and details.
+    """
+    quarantine_dir = rules_dir.parent / "generated" / "quarantine"
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+
+    src = None
+    rule_type = None
+    for candidate_type in ("sigma", "yara", "wazuh"):
+        candidate = quarantine_dir / candidate_type / rule_name
+        if candidate.exists():
+            src = candidate
+            rule_type = candidate_type
+            break
+
+    if src is None:
+        return {"status": "not_found", "rule_name": rule_name}
+
+    used_ids = get_all_used_ids(rules_dir)
+    dest = rules_dir / rule_type / rule_name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    if rule_type == "sigma":
+        get_or_assign_sigma_id(dest, used_ids)
+    elif rule_type == "wazuh":
+        get_or_assign_wazuh_ids(dest, used_ids)
+
+    src.unlink()
+
+    base = rule_name.rsplit(".", 1)[0] if "." in rule_name else rule_name
+    meta_file = metadata_dir / f"{base}.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            meta["deployment_status"] = "pending"
+            meta["promoted_from_quarantine"] = True
+            meta_file.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+        except Exception as e:
+            log.warning("promote_metadata_update_failed", rule_name=rule_name, error=str(e))
+
+    rebuild_local_rules(rules_dir)
+    log.info("rule_promoted_from_quarantine", rule_name=rule_name, rule_type=rule_type)
+
+    return {"status": "ok", "rule_name": rule_name, "rule_type": rule_type}
