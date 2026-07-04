@@ -9,6 +9,7 @@ Pipeline steps:
   5. Write metadata to metadata/.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -63,6 +64,13 @@ def process_pending_rules(
     (approved_dir / "wazuh").mkdir(parents=True, exist_ok=True)
     (rules_dir.parent / "generated" / "conversion_cache").mkdir(parents=True, exist_ok=True)
 
+    quarantine_dir = rules_dir.parent / "generated" / "quarantine"
+    (quarantine_dir / "yara").mkdir(parents=True, exist_ok=True)
+    (quarantine_dir / "sigma").mkdir(parents=True, exist_ok=True)
+    (quarantine_dir / "wazuh").mkdir(parents=True, exist_ok=True)
+
+    quarantine_tags = {t.strip() for t in os.getenv("QUARANTINE_TAGS", "unverified").split(",") if t.strip()}
+
     validator = RuleValidator()
     existing_hashes = load_existing_hashes(approved_dir)
     used_ids = get_all_used_ids(rules_dir)
@@ -73,6 +81,7 @@ def process_pending_rules(
         "rejected": 0,
         "duplicated": 0,
         "converted": 0,
+        "quarantined": 0,
         "errors": [],
     }
 
@@ -111,6 +120,28 @@ def process_pending_rules(
         if is_duplicate(rule.rule_type, rule.content, existing_hashes):
             log.info("rule_duplicate_skipped", name=rule.name)
             stats["duplicated"] += 1
+            continue
+
+        # Step 2b: Quarantine gate — tagged content sits here until manually promoted,
+        # never reaches approved_dir/rules_dir, so rebuild_local_rules() never sees it.
+        if quarantine_tags & set(rule.tags or []):
+            log.info("rule_quarantined", name=rule.name, tags=rule.tags)
+            dest = quarantine_dir / rule.rule_type / rule.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(rule.content, encoding="utf-8")
+            write_rule_metadata(
+                metadata_dir=metadata_dir,
+                rule_name=rule.name,
+                rule_type=rule.rule_type,
+                event_id=rule.event_id,
+                event_uuid=rule.event_uuid,
+                validation_result=result,
+                content_hash=content_hash,
+                tags=rule.tags,
+                deployment_status="quarantined",
+            )
+            stats["quarantined"] += 1
+            existing_hashes.add(content_hash)
             continue
 
         # Step 3: Write to approved source directory & Assign IDs

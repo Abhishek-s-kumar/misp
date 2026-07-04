@@ -22,6 +22,7 @@ def write_rule_metadata(
     conversion_target: Optional[str] = None,
     content_hash: Optional[str] = None,
     tags: Optional[List[str]] = None,
+    deployment_status: str = "pending",
 ) -> Path:
     """
     Write a JSON metadata document recording the lifecycle of a rule.
@@ -59,7 +60,7 @@ def write_rule_metadata(
         "conversion_status": "converted" if converted else "none",
         "conversion_target": conversion_target,
         "tags": tags or [],
-        "deployment_status": "pending",
+        "deployment_status": deployment_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
