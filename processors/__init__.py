@@ -29,7 +29,7 @@ from processors.xml_merger import (
 
 log = structlog.get_logger()
 
-__all__ = ["process_pending_rules", "promote_quarantined_rule", "list_quarantined_rules"]
+__all__ = ["process_pending_rules", "promote_quarantined_rule", "list_quarantined_rules", "reject_quarantined_rule"]
 
 
 def process_pending_rules(
@@ -274,3 +274,39 @@ def promote_quarantined_rule(rule_name: str, rules_dir: Path) -> Dict[str, Any]:
     log.info("rule_promoted_from_quarantine", rule_name=rule_name, rule_type=rule_type)
 
     return {"status": "ok", "rule_name": rule_name, "rule_type": rule_type}
+
+def reject_quarantined_rule(rule_name: str, rules_dir: Path, reason: str = "") -> Dict[str, Any]:
+    """
+    Permanently discard a quarantined rule: delete the quarantined file,
+    mark its metadata as rejected (audit trail kept), never touches
+    approved_dir/rules_dir.
+    """
+    quarantine_dir = rules_dir.parent / "generated" / "quarantine"
+    metadata_dir = rules_dir.parent / "generated" / "metadata"
+
+    src = None
+    for candidate_type in ("sigma", "yara", "wazuh"):
+        candidate = quarantine_dir / candidate_type / rule_name
+        if candidate.exists():
+            src = candidate
+            break
+
+    if src is None:
+        return {"status": "not_found", "rule_name": rule_name}
+
+    src.unlink()
+
+    base = rule_name.rsplit(".", 1)[0] if "." in rule_name else rule_name
+    meta_file = metadata_dir / f"{base}.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            meta["deployment_status"] = "rejected"
+            meta["rejection_reason"] = reason
+            meta_file.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+        except Exception as e:
+            log.warning("reject_metadata_update_failed", rule_name=rule_name, error=str(e))
+
+    log.info("rule_rejected_from_quarantine", rule_name=rule_name, reason=reason)
+    return {"status": "ok", "rule_name": rule_name}
+

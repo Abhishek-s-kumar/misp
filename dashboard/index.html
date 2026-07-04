@@ -585,6 +585,8 @@
             const [deployDryRun, setDeployDryRun] = useState(true);
             const [deployTags, setDeployTags] = useState('');
             const [rollbackTag, setRollbackTag] = useState('');
+            const [quarantineList, setQuarantineList] = useState([]);
+            const [quarantineLoading, setQuarantineLoading] = useState(false);
 
             // App State
             const [logs, setLogs] = useState([]);
@@ -639,6 +641,7 @@
             useEffect(() => {
                 addLog('info', 'Detection pipeline dashboard loaded. Ready for actions.');
                 checkHealth();
+                fetchQuarantine();
                 const interval = setInterval(checkHealth, 15000);
                 return () => clearInterval(interval);
             }, []);
@@ -729,6 +732,57 @@
                 } finally {
                     setIsRunning(false);
                     setActiveTool(null);
+                }
+            };
+
+            const fetchQuarantine = async () => {
+                setQuarantineLoading(true);
+                try {
+                    const res = await fetch('/quarantine');
+                    const data = await res.json();
+                    setQuarantineList(data);
+                } catch (e) {
+                    addLog('error', `Failed to load quarantine list: ${e.message}`);
+                } finally {
+                    setQuarantineLoading(false);
+                }
+            };
+
+            const promoteQuarantineRule = async (ruleName) => {
+                try {
+                    const res = await fetch('/quarantine/promote', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rule_name: ruleName })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        addLog('success', `Promoted rule: ${ruleName}`, data);
+                    } else {
+                        addLog('error', `Promote failed for ${ruleName}`, data);
+                    }
+                    fetchQuarantine();
+                } catch (e) {
+                    addLog('error', `Promote request failed: ${e.message}`);
+                }
+            };
+
+            const rejectQuarantineRule = async (ruleName) => {
+                try {
+                    const res = await fetch('/quarantine/reject', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rule_name: ruleName, reason: 'rejected via dashboard' })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        addLog('success', `Rejected rule: ${ruleName}`, data);
+                    } else {
+                        addLog('error', `Reject failed for ${ruleName}`, data);
+                    }
+                    fetchQuarantine();
+                } catch (e) {
+                    addLog('error', `Reject request failed: ${e.message}`);
                 }
             };
 

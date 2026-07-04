@@ -12,7 +12,7 @@ import structlog
 from collector.base import RawRule
 from collector.misp_rules import get_rule_provider, MISPRuleCollector
 from validators import RuleValidator
-from processors import process_pending_rules
+from processors import process_pending_rules, list_quarantined_rules, promote_quarantined_rule, reject_quarantined_rule
 from processors.git_ops import commit_and_push_to_dev, get_or_create_pr
 from collector.github_provider import GitHubRepoSource
 
@@ -787,3 +787,31 @@ def sync_github_rules() -> SyncResult:
         commit_sha=commit_sha,
         pr_url=pr_url,
     )
+
+def _resolve_rules_dir() -> Path:
+    """Same repo-selection logic as sync_misp_rules/sync_github_rules: respect
+    two-repo mode (DAC_REPO_PATH) so quarantine ops target the same rules/
+    directory the sync path writes into."""
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
+    repo_dir = Path(repo_path)
+    dac_repo_path_str = os.getenv("DAC_REPO_PATH", "")
+    if dac_repo_path_str and Path(dac_repo_path_str) != repo_dir:
+        return Path(dac_repo_path_str) / "rules"
+    return repo_dir / "rules"
+
+
+def list_quarantine() -> List[Dict[str, Any]]:
+    """List all rules currently sitting in quarantine, with metadata."""
+    return list_quarantined_rules(_resolve_rules_dir())
+
+
+def promote_rule(rule_name: str) -> Dict[str, Any]:
+    """Approve a quarantined rule: move it into the real rules dir, assign
+    IDs, rebuild generated/local_rules.xml."""
+    return promote_quarantined_rule(rule_name, _resolve_rules_dir())
+
+
+def reject_rule(rule_name: str, reason: str = "") -> Dict[str, Any]:
+    """Reject a quarantined rule: delete it, keep a rejected metadata record."""
+    return reject_quarantined_rule(rule_name, _resolve_rules_dir(), reason=reason)
+
