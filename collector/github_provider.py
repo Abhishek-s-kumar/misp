@@ -1,208 +1,167 @@
 """
-collector/github_provider.py — Pulls Sigma/YARA rule files from external GitHub repos.
+GitHub rule source for mcp_tools.rule_tools.sync_github_rules().
 
-Incrementality is commit-SHA based, not datetime-based:
-  - Each source (repo + pinned ref + optional subfolder path) resolves to a commit SHA
-    on every sync call. If it matches the last-synced SHA, nothing is fetched (no-op) —
-    that's the pin: nothing new comes in until the ref is bumped manually.
-  - If the SHA differs and this is the FIRST sync of that source (no stored SHA yet),
-    the whole repo is downloaded as a single tarball at that commit (one API call,
-    regardless of file count) and the scoped subfolder is read off disk. This avoids
-    making one Contents-API call per file, which is fine for a handful of files but
-    blows through rate limits and takes minutes on folders with 1000+ files.
-  - If the SHA differs and there IS a stored last-synced SHA, the GitHub Compare API
-    fetches only the files that changed since then (typically a small number), and
-    those are fetched individually via the Contents API — a full tarball re-download
-    isn't worth it for a small diff.
+GitHubRepoSource wraps a single GitHub repo/ref/path as a pull source.
+Incremental sync is commit-SHA based: fetch() resolves `ref` to its
+current HEAD SHA and compares against `last_synced_sha` (persisted by
+the caller in .sync_state.json under "github_sources"). If unchanged,
+returns immediately with zero tree/blob API calls. If changed, does a
+full re-fetch of all in-scope files at the new HEAD -- this is repo-level
+granularity, not per-file diffing, which is a deliberate simplification:
+cheap (one extra API call per source per sync when nothing changed) and
+avoids the complexity of tracking per-file state, at the cost of
+re-downloading unchanged files within a repo that had ANY change.
+Reasonable for the file counts involved here (~1000s, not 100,000s).
+
+RawRule's event_id / event_uuid / misp_timestamp fields are MISP-shaped
+concepts with no GitHub equivalent -- synthesized:
+  - event_id: stable hash of "owner/repo".
+  - event_uuid: the file's git blob SHA (real, content-addressed).
+  - misp_timestamp: fetch time (GitHub tree listing has no per-file
+    commit date without one extra API call per file).
 """
 
 import base64
-import tarfile
-import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from collector.base import RawRule
 
 log = structlog.get_logger()
 
-GITHUB_API = "https://api.github.com"
-CODELOAD = "https://codeload.github.com"
-
 EXTENSION_MAP = {
-    ".yar": "yara",
-    ".yara": "yara",
     ".yml": "sigma",
     ".yaml": "sigma",
+    ".yar": "yara",
+    ".yara": "yara",
 }
+
+GITHUB_API = "https://api.github.com"
 
 
 class GitHubRepoSource:
-    def __init__(
-        self,
-        repo: str,
-        ref: str,
-        path: str = "",
-        token: str = "",
-        extra_tags: Optional[List[str]] = None,
-    ):
+    def __init__(self, repo: str, ref: str, path: str, token: str, extra_tags: List[str]):
         self.repo = repo
         self.ref = ref
-        self.path = path.strip("/")
+        self.path = path
         self.token = token
-        self.extra_tags = extra_tags or []
+        self.extra_tags = extra_tags
+        if not token:
+            log.warning(
+                "github_source_no_token",
+                repo=repo,
+                message="GITHUB_TOKEN not set -- limited to 60 req/hr",
+            )
 
     def _headers(self) -> dict:
-        h = {"Accept": "application/vnd.github+json"}
+        headers = {"Accept": "application/vnd.github+json"}
         if self.token:
-            h["Authorization"] = f"Bearer {self.token}"
-        return h
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
-    def _resolve_ref_sha(self) -> str:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _resolve_head_sha(self) -> str:
         url = f"{GITHUB_API}/repos/{self.repo}/commits/{self.ref}"
         resp = requests.get(url, headers=self._headers(), timeout=30)
         resp.raise_for_status()
         return resp.json()["sha"]
 
-    def _in_scope(self, file_path: str) -> bool:
-        if self.path and not (file_path == self.path or file_path.startswith(self.path + "/")):
-            return False
-        return Path(file_path).suffix.lower() in EXTENSION_MAP
-
-    def _list_changed_files(self, base_sha: str, head_sha: str) -> List[str]:
-        """GitHub Compare API — only files added/modified/renamed between base and head."""
-        url = f"{GITHUB_API}/repos/{self.repo}/compare/{base_sha}...{head_sha}"
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _fetch_tree(self, commit_sha: str) -> List[dict]:
+        url = f"{GITHUB_API}/repos/{self.repo}/git/trees/{commit_sha}?recursive=1"
         resp = requests.get(url, headers=self._headers(), timeout=30)
         resp.raise_for_status()
-        out = []
-        for f in resp.json().get("files", []):
-            if f.get("status") not in ("added", "modified", "renamed"):
-                continue
-            if self._in_scope(f["filename"]):
-                out.append(f["filename"])
-        return out
-
-    def _fetch_file_content(self, path: str, ref: str) -> Optional[str]:
-        url = f"{GITHUB_API}/repos/{self.repo}/contents/{path}"
-        resp = requests.get(url, params={"ref": ref}, headers=self._headers(), timeout=30)
-        if resp.status_code != 200:
-            log.warning("github_file_fetch_failed", path=path, status=resp.status_code)
-            return None
         data = resp.json()
-        if data.get("encoding") == "base64" and data.get("content"):
-            try:
-                return base64.b64decode(data["content"]).decode("utf-8")
-            except Exception as e:
-                log.warning("github_file_decode_failed", path=path, error=str(e))
-                return None
-        return data.get("content")
-
-    def _fetch_files_individually(self, file_paths: List[str], ref: str) -> List[RawRule]:
-        raw_rules: List[RawRule] = []
-        now = datetime.now(timezone.utc)
-        for p in file_paths:
-            content = self._fetch_file_content(p, ref)
-            if not content:
-                continue
-            rule_type = EXTENSION_MAP.get(Path(p).suffix.lower())
-            if not rule_type:
-                continue
-            raw_rules.append(
-                RawRule(
-                    rule_type=rule_type,
-                    name=Path(p).name,
-                    content=content,
-                    event_id=0,
-                    event_uuid=f"github:{self.repo}@{ref[:12]}",
-                    misp_timestamp=now,
-                    tags=["source:github", f"repo:{self.repo}"] + self.extra_tags,
-                )
+        if data.get("truncated"):
+            log.warning(
+                "github_tree_truncated",
+                repo=self.repo,
+                message="repo tree exceeds GitHub's single-response limit, some files were not listed",
             )
-        return raw_rules
+        return data.get("tree", [])
 
-    def _full_pull_via_tarball(self, head_sha: str) -> List[RawRule]:
-        """One-shot tarball download + local extraction, scoped to self.path."""
-        url = f"{CODELOAD}/{self.repo}/tar.gz/{head_sha}"
-        headers = {}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _fetch_blob_content(self, blob_url: str) -> str:
+        resp = requests.get(blob_url, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("encoding") == "base64":
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        return data.get("content", "")
 
-        raw_rules: List[RawRule] = []
-        now = datetime.now(timezone.utc)
+    @staticmethod
+    def _get_extension(filename: str) -> str:
+        dot_idx = filename.rfind(".")
+        return filename[dot_idx:].lower() if dot_idx != -1 else ""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tar_path = Path(tmpdir) / "repo.tar.gz"
-            resp = requests.get(url, headers=headers, stream=True, timeout=180)
-            resp.raise_for_status()
-            with open(tar_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                    f.write(chunk)
-
-            extract_dir = Path(tmpdir) / "extracted"
-            extract_dir.mkdir()
-            with tarfile.open(tar_path, "r:gz") as tar:
-                try:
-                    tar.extractall(extract_dir, filter="data")
-                except TypeError:
-                    # Python < 3.12 doesn't support the filter= kwarg
-                    tar.extractall(extract_dir)
-
-            roots = [p for p in extract_dir.iterdir() if p.is_dir()]
-            if not roots:
-                log.warning("github_tarball_empty", repo=self.repo)
-                return []
-            root_dir = roots[0]
-            scope_dir = (root_dir / self.path) if self.path else root_dir
-            if not scope_dir.exists():
-                log.warning("github_tarball_scope_missing", repo=self.repo, path=self.path)
-                return []
-
-            for file_path in scope_dir.rglob("*"):
-                if not file_path.is_file():
-                    continue
-                rule_type = EXTENSION_MAP.get(file_path.suffix.lower())
-                if not rule_type:
-                    continue
-                try:
-                    content = file_path.read_text(encoding="utf-8")
-                except Exception as e:
-                    log.warning("github_tarball_file_read_failed", path=str(file_path), error=str(e))
-                    continue
-                raw_rules.append(
-                    RawRule(
-                        rule_type=rule_type,
-                        name=file_path.name,
-                        content=content,
-                        event_id=0,
-                        event_uuid=f"github:{self.repo}@{head_sha[:12]}",
-                        misp_timestamp=now,
-                        tags=["source:github", f"repo:{self.repo}"] + self.extra_tags,
-                    )
-                )
-
-        log.info("github_full_pull_tarball", repo=self.repo, path=self.path, count=len(raw_rules))
-        return raw_rules
-
-    def fetch(self, last_synced_sha: Optional[str]) -> Tuple[List[RawRule], str, bool]:
+    def fetch(self, last_synced_sha: Optional[str] = None) -> Tuple[List[RawRule], str, bool]:
         """
-        Returns (raw_rules, resolved_head_sha, changed).
-        changed=False means the pinned ref is unchanged since last sync — nothing pulled.
+        Returns (raw_rules, head_sha, changed).
+        changed=False means head_sha == last_synced_sha, raw_rules is empty,
+        no tree/blob calls were made.
         """
-        head_sha = self._resolve_ref_sha()
+        head_sha = self._resolve_head_sha()
 
-        if last_synced_sha == head_sha:
-            log.info("github_source_unchanged", repo=self.repo, ref=self.ref, sha=head_sha)
+        if last_synced_sha is not None and last_synced_sha == head_sha:
+            log.info("github_source_unchanged", repo=self.repo, sha=head_sha[:12])
             return [], head_sha, False
 
-        if last_synced_sha:
-            file_paths = self._list_changed_files(last_synced_sha, head_sha)
-            log.info("github_incremental_pull", repo=self.repo, count=len(file_paths))
-            raw_rules = self._fetch_files_individually(file_paths, head_sha)
-        else:
-            raw_rules = self._full_pull_via_tarball(head_sha)
+        tree = self._fetch_tree(head_sha)
+        event_id = abs(hash(self.repo)) % (2**31)
 
+        in_scope = []
+        for entry in tree:
+            if entry.get("type") != "blob":
+                continue
+            path = entry["path"]
+            if self.path and not path.startswith(self.path):
+                continue
+            ext = self._get_extension(path)
+            if ext not in EXTENSION_MAP:
+                continue
+            in_scope.append(entry)
+
+        log.info(
+            "github_source_scope_resolved",
+            repo=self.repo,
+            file_count=len(in_scope),
+            head_sha=head_sha[:12],
+        )
+
+        raw_rules: List[RawRule] = []
+
+        def _fetch_one(entry):
+            try:
+                return entry, self._fetch_blob_content(entry["url"]), None
+            except Exception as e:
+                return entry, None, e
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(_fetch_one, e) for e in in_scope]
+            for i, future in enumerate(as_completed(futures), start=1):
+                entry, content, err = future.result()
+                if err is not None:
+                    log.warning("github_blob_fetch_failed", path=entry["path"], error=str(err))
+                    continue
+                ext = self._get_extension(entry["path"])
+                raw_rules.append(
+                    RawRule(
+                        rule_type=EXTENSION_MAP[ext],
+                        name=entry["path"].replace("/", "__"),
+                        content=content,
+                        event_id=event_id,
+                        event_uuid=entry["sha"],
+                        misp_timestamp=datetime.now(timezone.utc),
+                        tags=list(self.extra_tags) + [f"repo:{self.repo}"],
+                    )
+                )
+                if i % 50 == 0 or i == len(in_scope):
+                    log.info("github_source_fetch_progress", repo=self.repo, done=i, total=len(in_scope))
+
+        log.info("github_source_rules_fetched", repo=self.repo, count=len(raw_rules))
         return raw_rules, head_sha, True

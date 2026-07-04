@@ -335,6 +335,15 @@ def deploy_rules(
             )
         active_repo_path = dac_path
         public_commit_sha = dac_repo.head.commit.hexsha
+        from processors.xml_merger import rebuild_local_rules
+        try:
+            rebuild_local_rules(dac_path / "rules")
+        except Exception as e:
+            log.error("deploy_public_repo_compile_failed", error=str(e))
+            return DeployResult(
+                status=f"aborted: failed to compile public repo rules: {e}",
+                hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
+            )
     else:
         active_repo_path = Path(local_repo_path)
         public_commit_sha = ""
