@@ -131,21 +131,33 @@ class TestProcessors(unittest.TestCase):
         self.assertTrue(is_duplicate(content, existing))
         self.assertFalse(is_duplicate("other content", existing))
 
-    @patch("subprocess.run")
-    def test_sigma_converter_cli(self, mock_run):
-        mock_res = MagicMock()
-        mock_res.returncode = 0
-        mock_res.stdout = "<group name='converted'><rule id='100299'></rule></group>"
-        mock_run.return_value = mock_res
+    def test_sigma_converter_native_success(self):
+        # Simple AND-only, single-field condition -- within the native converter's
+        # documented scope, should produce real detection logic, not the mock fallback.
+        sigma_yml = (
+            "title: Test Native Conversion\n"
+            "level: high\n"
+            "logsource:\n"
+            "  product: windows\n"
+            "detection:\n"
+            "  selection:\n"
+            "    CommandLine: 'test.exe'\n"
+            "  condition: selection\n"
+        )
+        xml = convert_sigma_to_wazuh(sigma_yml, "test_native.yml")
+        self.assertIsNotNone(xml)
+        self.assertNotIn("NEEDS MANUAL REVIEW", xml)
+        self.assertIn("<field", xml)
 
-        xml = convert_sigma_to_wazuh("sigma rules content", "test.yml")
-        self.assertIn("converted", xml)
+    def test_sigma_converter_unparseable_returns_none(self):
+        xml = convert_sigma_to_wazuh("not: valid: sigma: [[[", "broken.yml")
+        self.assertIsNone(xml)
 
     def test_sigma_mock_fallback(self):
         sigma_yml = "title: Process Creation\nlevel: high"
         xml = _mock_sigma_to_wazuh(sigma_yml, "test_mock.yml")
-        self.assertIn("<group name=\"sigma,misp,\">", xml)
-        self.assertIn("Process Creation [Sigma converted]", xml)
+        self.assertIn("<group name=\"sigma,misp,needs_review,\">", xml)
+        self.assertIn("Process Creation [NEEDS MANUAL REVIEW - NO DETECTION LOGIC]", xml)
         self.assertIn("level=\"10\"", xml)  # high maps to 10
 
     def test_compute_sigma_hash(self):
@@ -401,7 +413,7 @@ class TestCheckRuleIds(unittest.TestCase):
         import importlib.util, sys
         spec = importlib.util.spec_from_file_location(
             "check_rule_ids",
-            Path("/home/rpi/misp/DaC/check_rule_ids.py"),
+            Path(__file__).resolve().parent.parent.parent / "DaC" / "check_rule_ids.py",
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

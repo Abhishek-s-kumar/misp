@@ -1,82 +1,92 @@
-import subprocess
-import tempfile
+"""
+Sigma -> Wazuh XML conversion.
+
+No official Wazuh backend exists for pySigma/sigma-cli (verified via
+`sigma plugin list` -- Wazuh is absent from all registered backends), so
+conversion is done natively by walking pySigma's parsed rule model
+directly. See sigma_to_wazuh_native.py for the AND-only field-mapping
+logic and its documented scope limits.
+
+Mock conversion remains ONLY as a last-resort fallback for rules that
+fail to parse at all, and is clearly tagged in both the log and the
+returned XML's description so it can never be mistaken for a real
+detection in dashboards or audits.
+"""
+
 from pathlib import Path
 from typing import Optional
 
 import structlog
+from sigma.collection import SigmaCollection
+from sigma.exceptions import SigmaError
+
+from processors.sigma_to_wazuh_native import convert_rule as _native_convert_rule
 
 log = structlog.get_logger()
+
+LEVEL_MAP = {"low": 3, "medium": 5, "high": 10, "critical": 15}
+
+# Placeholder rule id for the pre-override XML. xml_merger.py always calls
+# override_xml_rule_ids() with the real id from the Sigma YAML's
+# custom.wazuh_rule_id field after this returns, so this value never
+# reaches a deployed rule -- it exists only so the XML is well-formed
+# while in transit.
+_PLACEHOLDER_RULE_ID = 100000
 
 
 def convert_sigma_to_wazuh(
     sigma_content: str, sigma_name: str
 ) -> Optional[str]:
     """
-    Convert a Sigma YAML rule to Wazuh XML format using sigma-cli.
-
-    In environments where sigma-cli is not available, returns a deterministic
-    mock XML wrapper for testing purposes.
+    Convert a Sigma YAML rule to Wazuh XML format via native pySigma
+    rule-object walking.
 
     Args:
         sigma_content: Raw Sigma YAML rule content.
         sigma_name: Filename of the Sigma rule (for logging).
 
     Returns:
-        Wazuh XML string if conversion succeeds, None on failure.
+        Wazuh XML string if conversion succeeds (native or mock
+        fallback), None only if the rule cannot be parsed as Sigma at all.
     """
-    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yml", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(sigma_content)
-            tmp_path = Path(tmp.name)
-
-        result = subprocess.run(
-            [
-                "sigma",
-                "convert",
-                "--target",
-                "wazuh",
-                "--without-pipeline",
-                str(tmp_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            log.info("sigma_conversion_success", rule=sigma_name)
-            return result.stdout.strip()
-        else:
-            log.warning(
-                "sigma_conversion_failed",
-                rule=sigma_name,
-                stderr=result.stderr,
-            )
-            # Fall through to mock conversion
-    except FileNotFoundError:
-        log.warning(
-            "sigma_cli_not_found",
-            message="sigma-cli not installed, using mock conversion",
-        )
-    except subprocess.TimeoutExpired:
-        log.warning("sigma_conversion_timeout", rule=sigma_name)
+        collection = SigmaCollection.from_yaml(sigma_content)
+    except SigmaError as e:
+        log.error("sigma_parse_error", rule=sigma_name, error=str(e))
+        return None
     except Exception as e:
-        log.warning("sigma_conversion_error", rule=sigma_name, error=str(e))
-    finally:
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink()
+        log.error("sigma_parse_error_unexpected", rule=sigma_name, error=str(e))
+        return None
 
-    # Mock conversion fallback for dev/test environments
+    if not collection.rules:
+        log.error("sigma_no_rules_in_file", rule=sigma_name)
+        return None
+
+    sigma_rule = collection.rules[0]
+    level_str = str(sigma_rule.level).lower() if sigma_rule.level else "medium"
+    wazuh_level = LEVEL_MAP.get(level_str, 5)
+
+    result = _native_convert_rule(sigma_rule, wazuh_level, _PLACEHOLDER_RULE_ID)
+
+    if result.xml is not None:
+        log.info("sigma_native_conversion_success", rule=sigma_name)
+        return result.xml
+
+    log.warning(
+        "sigma_native_conversion_unsupported",
+        rule=sigma_name,
+        reason=result.reason,
+        message="falling back to mock XML -- rule has NO detection logic, needs manual conversion",
+    )
     return _mock_sigma_to_wazuh(sigma_content, sigma_name)
 
 
 def _mock_sigma_to_wazuh(sigma_content: str, sigma_name: str) -> str:
     """
-    Deterministic mock Sigma→Wazuh XML conversion for testing.
-    Generates a valid Wazuh rule XML skeleton from the Sigma metadata.
+    Fallback for rules the native converter cannot handle (OR/NOT logic,
+    unparseable structure). Deliberately tagged '[NEEDS MANUAL REVIEW -
+    NO DETECTION LOGIC]' in the description so this can never be confused
+    with a real, firing rule in Wazuh's dashboard or rule count.
     """
     import yaml
 
@@ -84,21 +94,16 @@ def _mock_sigma_to_wazuh(sigma_content: str, sigma_name: str) -> str:
         sigma = yaml.safe_load(sigma_content)
     except Exception:
         sigma = {}
-
-    title = sigma.get("title", sigma_name)
-    level = sigma.get("level", "medium")
-    level_map = {"low": 3, "medium": 5, "high": 10, "critical": 15}
-    wazuh_level = level_map.get(level, 5)
-
-    # Generate a deterministic rule ID from the sigma name
-    rule_id = 100200 + (hash(sigma_name) % 100)
+    title = sigma.get("title", sigma_name) if isinstance(sigma, dict) else sigma_name
+    level = sigma.get("level", "medium") if isinstance(sigma, dict) else "medium"
+    wazuh_level = LEVEL_MAP.get(level, 5)
 
     xml = (
-        f'<group name="sigma,misp,">\n'
-        f'  <rule id="{rule_id}" level="{wazuh_level}">\n'
-        f"    <description>{title} [Sigma converted]</description>\n"
+        f'<group name="sigma,misp,needs_review,">\n'
+        f'  <rule id="{_PLACEHOLDER_RULE_ID}" level="{wazuh_level}">\n'
+        f"    <description>{title} [NEEDS MANUAL REVIEW - NO DETECTION LOGIC]</description>\n"
         f"  </rule>\n"
         f"</group>"
     )
-    log.info("sigma_mock_conversion", rule=sigma_name)
+    log.warning("sigma_mock_conversion_used", rule=sigma_name)
     return xml

@@ -12,7 +12,7 @@ import structlog
 from collector.base import RawRule
 from collector.misp_rules import get_rule_provider, MISPRuleCollector
 from validators import RuleValidator
-from processors import process_pending_rules
+from processors import process_pending_rules, list_quarantined_rules, promote_quarantined_rule, reject_quarantined_rule
 from processors.git_ops import commit_and_push_to_dev, get_or_create_pr
 from collector.github_provider import GitHubRepoSource
 
@@ -302,19 +302,60 @@ def deploy_rules(
     ssh_key_path: str = "",
     rule_names=None,
     tags=None,
+    source: str = "local",
 ) -> DeployResult:
     """
     Deploy validated rules to Wazuh managers via Ansible.
+    source="local" (default): deploy from TI_REPO_PATH, as before.
+    source="public": deploy from the public DAC_REPO_PATH repo instead — fetches and
+      hard-resets that clone to origin/main first, so what's deployed is exactly what's
+      merged/reviewed on GitHub, not anything stray sitting locally.
     """
-    repo_path = os.getenv("TI_REPO_PATH", "repository")
-    rules_dir = Path(repo_path) / "rules"
+    local_repo_path = os.getenv("TI_REPO_PATH", "repository")
 
-    # Safeguard: Check if rules/wazuh and rules/yara are empty
+    if source == "public":
+        dac_repo_path_str = os.getenv("DAC_REPO_PATH", "")
+        if not dac_repo_path_str:
+            log.warning("deploy_blocked_no_dac_repo_path")
+            return DeployResult(
+                status="aborted: DAC_REPO_PATH not set",
+                hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
+            )
+        dac_path = Path(dac_repo_path_str)
+        try:
+            dac_repo = Repo(dac_path)
+            dac_repo.git.fetch("origin")
+            dac_repo.git.checkout("main")
+            dac_repo.git.reset("--hard", "origin/main")
+        except Exception as e:
+            log.error("deploy_public_repo_sync_failed", error=str(e))
+            return DeployResult(
+                status=f"aborted: failed to sync public repo: {e}",
+                hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
+            )
+        active_repo_path = dac_path
+        public_commit_sha = dac_repo.head.commit.hexsha
+        from processors.xml_merger import rebuild_local_rules
+        try:
+            rebuild_local_rules(dac_path / "rules")
+        except Exception as e:
+            log.error("deploy_public_repo_compile_failed", error=str(e))
+            return DeployResult(
+                status=f"aborted: failed to compile public repo rules: {e}",
+                hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
+            )
+    else:
+        active_repo_path = Path(local_repo_path)
+        public_commit_sha = ""
+
+    rules_dir = active_repo_path / "rules"
+
+    # Safeguard: Check if rules/wazuh and rules/yara are empty (checked against the ACTIVE source)
     wazuh_rules_count = count_files_in_dir(rules_dir / "wazuh")
     yara_rules_count = count_files_in_dir(rules_dir / "yara")
 
     if wazuh_rules_count == 0 and yara_rules_count == 0:
-        log.warning("deploy_blocked_empty_rules")
+        log.warning("deploy_blocked_empty_rules", source=source)
         return DeployResult(
             status="aborted: no rules to deploy",
             hosts_succeeded=[], hosts_failed=[], deploy_tag="", deploy_metadata={}, dry_run=dry_run
@@ -332,11 +373,11 @@ def deploy_rules(
         vault_pass_file = os.getenv("ANSIBLE_VAULT_PASSWORD_FILE", "ansible/.vault_pass")
         is_local_mock = os.getenv("IS_LOCAL_MOCK", "true").lower() in ("true", "1")
 
-        deploy_src_file = Path(repo_path).resolve() / "generated" / "local_rules.xml"
+        deploy_src_file = active_repo_path.resolve() / "generated" / "local_rules.xml"
         if rule_names or tags:
             from processors.xml_merger import build_filtered_rules_xml
             filtered_xml = build_filtered_rules_xml(rules_dir, rule_names=set(rule_names) if rule_names else None, tags=set(tags) if tags else None)
-            deploy_src_file = Path(repo_path).resolve() / "generated" / "deploy_filtered.xml"
+            deploy_src_file = active_repo_path.resolve() / "generated" / "deploy_filtered.xml"
             deploy_src_file.write_text(filtered_xml, encoding="utf-8")
 
         cmd = [
@@ -355,8 +396,8 @@ def deploy_rules(
         if dry_run:
             cmd.append("--check")
 
-        log.info("running_ansible_rules_deployment", command=" ".join(cmd), dry_run=dry_run)
-        workspace_root = str(Path(repo_path).parent)
+        log.info("running_ansible_rules_deployment", command=" ".join(cmd), dry_run=dry_run, source=source)
+        workspace_root = str(Path(local_repo_path).parent)
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=workspace_root)
 
         if result.returncode != 0:
@@ -376,21 +417,24 @@ def deploy_rules(
         tag_metadata = {}
 
         if not dry_run:
-            repo = Repo(repo_path)
+            # Deploy tag/manifest always recorded on the local pipeline repo — this is the
+            # pipeline's own deployment audit trail, regardless of which source was deployed.
+            repo = Repo(local_repo_path)
             repo.git.checkout("main")
             main_commit = repo.head.commit.hexsha
             timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
             deploy_tag = f"deploy-rules-{timestamp_str}"
 
-            # Write deployment manifest
-            manifests_dir = Path(repo_path) / "generated" / "manifests"
+            manifests_dir = Path(local_repo_path) / "generated" / "manifests"
             manifests_dir.mkdir(parents=True, exist_ok=True)
             manifest_file = manifests_dir / f"{deploy_tag}.json"
 
             tag_metadata = {
                 "type": "deploy",
                 "scope": "rules",
+                "source": source,
                 "commit": main_commit,
+                "public_repo_commit": public_commit_sha,
                 "rule_counts": {
                     "wazuh_xml": wazuh_rules_count,
                     "yara": yara_rules_count
@@ -398,17 +442,11 @@ def deploy_rules(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "operator": os.getenv("OPERATOR_NAME", "dashboard")
             }
-
             manifest_file.write_text(json.dumps(tag_metadata, indent=2), encoding="utf-8")
-
-            # Add manifest to Git repository
             repo.git.add(f"generated/manifests/{deploy_tag}.json")
             repo.index.commit(f"manifest: record rule deployment {deploy_tag}")
-            
-            # Re-get the commit hash for the tag
             main_commit = repo.head.commit.hexsha
             tag_metadata["commit"] = main_commit
-
             try:
                 repo.create_tag(deploy_tag, message=json.dumps(tag_metadata))
                 if repo.remotes:
@@ -617,14 +655,24 @@ def _save_github_state(repo_path: Path, github_sources: dict) -> None:
 
 
 def sync_github_rules() -> SyncResult:
-    """Pull Sigma/YARA rules from configured external GitHub repos (pinned ref, manual bump)."""
+    """Pull Sigma/YARA rules from configured external GitHub repos (pinned ref, manual bump).
+    Supports two-repo mode via DAC_REPO_PATH, same as sync_misp_rules: pushes to the
+    public repo's dev branch and opens/reuses a PR, instead of committing straight to
+    the local repository's main.
+    """
     repo_path = os.getenv("TI_REPO_PATH", "repository")
     repo_dir = Path(repo_path)
-    rules_dir = repo_dir / "rules"
+
+    dac_repo_path_str = os.getenv("DAC_REPO_PATH", "")
+    separate_dac_repo = bool(dac_repo_path_str) and Path(dac_repo_path_str) != repo_dir
+
+    if separate_dac_repo:
+        rules_dir = Path(dac_repo_path_str) / "rules"
+    else:
+        rules_dir = repo_dir / "rules"
 
     token = os.getenv("GITHUB_TOKEN", "")
     extra_tags = [t.strip() for t in os.getenv("GITHUB_RULE_TAGS", "").split(",") if t.strip()]
-
     sources = []
     sigma_repo = os.getenv("GITHUB_SIGMA_REPO", "")
     if sigma_repo:
@@ -644,13 +692,11 @@ def sync_github_rules() -> SyncResult:
             token=token,
             extra_tags=extra_tags,
         ))
-
     if not sources:
         return SyncResult(status="no_sources_configured", total_pulled=0, approved=0, rejected=0, duplicated=0, converted=0, commit_sha="")
 
     github_state = _load_github_state(repo_dir)
     all_raw_rules = []
-
     for src in sources:
         last_sha = github_state.get(src.repo)
         raw_rules, head_sha, changed = src.fetch(last_synced_sha=last_sha)
@@ -669,29 +715,67 @@ def sync_github_rules() -> SyncResult:
         f"pulled={stats['total']} approved={stats['approved']} converted={stats['converted']}"
     )
 
-    repo = Repo(repo_dir)
-    repo.git.checkout("main")
-    files_to_add = []
-    if rules_dir.exists():
-        files_to_add.append("rules/")
-    if (repo_dir / "generated").exists():
-        files_to_add.append("generated/")
-    if (repo_dir / ".sync_state.json").exists():
-        files_to_add.append(".sync_state.json")
-    if files_to_add:
-        repo.git.add(files_to_add)
-
     commit_sha = ""
-    if repo.is_dirty(untracked_files=True) or len(repo.index.diff("HEAD")) > 0:
-        commit = repo.index.commit(commit_msg)
-        commit_sha = commit.hexsha
-        try:
-            if repo.remotes:
-                repo.remotes.origin.push("main")
-        except Exception as e:
-            log.warning("git_push_github_rules_failed", error=str(e))
+    pr_url = ""
 
-    _save_github_state(repo_dir, github_state)
+    if separate_dac_repo:
+        # ── Two-repo mode ──────────────────────────────────────────────────────
+        dac_repo_path = Path(dac_repo_path_str)
+        commit_sha = commit_and_push_to_dev(dac_repo_path, commit_msg) or ""
+
+        # Also persist github sync state on the pipeline repo's main
+        try:
+            repo = Repo(repo_dir)
+            repo.git.checkout("main")
+            _save_github_state(repo_dir, github_state)
+            if (repo_dir / ".sync_state.json").exists():
+                repo.git.add([".sync_state.json"])
+            if repo.is_dirty(untracked_files=False):
+                pipeline_commit = repo.index.commit(f"state: {commit_msg}")
+                commit_sha = commit_sha or pipeline_commit.hexsha
+                if repo.remotes:
+                    repo.remotes.origin.push("main")
+        except Exception as e:
+            log.warning("git_push_github_state_failed", error=str(e))
+
+        if commit_sha:
+            pr_result = get_or_create_pr(
+                dac_repo_path,
+                pr_title=f"sync: GitHub rules update [{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%MZ')}]",
+                pr_body=(
+                    f"Automated GitHub external rule source synchronization.\n\n"
+                    f"- Rules pulled: {stats['total']}\n"
+                    f"- Approved: {stats['approved']}\n"
+                    f"- Converted: {stats['converted']}\n"
+                    f"- Rejected: {stats['rejected']}\n"
+                    f"- Sources: {', '.join(s.repo for s in sources)}\n"
+                ),
+            )
+            pr_url = pr_result.get("url") or ""
+            log.info("github_pr_status", action=pr_result.get("action"), pr_url=pr_url)
+
+    else:
+        # ── Single-repo mode (default / tests) ────────────────────────────────
+        repo = Repo(repo_dir)
+        repo.git.checkout("main")
+        files_to_add = []
+        if rules_dir.exists():
+            files_to_add.append("rules/")
+        if (repo_dir / "generated").exists():
+            files_to_add.append("generated/")
+        _save_github_state(repo_dir, github_state)
+        if (repo_dir / ".sync_state.json").exists():
+            files_to_add.append(".sync_state.json")
+        if files_to_add:
+            repo.git.add(files_to_add)
+        if repo.is_dirty(untracked_files=True) or len(repo.index.diff("HEAD")) > 0:
+            commit = repo.index.commit(commit_msg)
+            commit_sha = commit.hexsha
+            try:
+                if repo.remotes:
+                    repo.remotes.origin.push("main")
+            except Exception as e:
+                log.warning("git_push_github_rules_failed", error=str(e))
 
     return SyncResult(
         status="committed" if commit_sha else "no_changes",
@@ -701,4 +785,33 @@ def sync_github_rules() -> SyncResult:
         duplicated=stats["duplicated"],
         converted=stats["converted"],
         commit_sha=commit_sha,
+        pr_url=pr_url,
     )
+
+def _resolve_rules_dir() -> Path:
+    """Same repo-selection logic as sync_misp_rules/sync_github_rules: respect
+    two-repo mode (DAC_REPO_PATH) so quarantine ops target the same rules/
+    directory the sync path writes into."""
+    repo_path = os.getenv("TI_REPO_PATH", "repository")
+    repo_dir = Path(repo_path)
+    dac_repo_path_str = os.getenv("DAC_REPO_PATH", "")
+    if dac_repo_path_str and Path(dac_repo_path_str) != repo_dir:
+        return Path(dac_repo_path_str) / "rules"
+    return repo_dir / "rules"
+
+
+def list_quarantine() -> List[Dict[str, Any]]:
+    """List all rules currently sitting in quarantine, with metadata."""
+    return list_quarantined_rules(_resolve_rules_dir())
+
+
+def promote_rule(rule_name: str) -> Dict[str, Any]:
+    """Approve a quarantined rule: move it into the real rules dir, assign
+    IDs, rebuild generated/local_rules.xml."""
+    return promote_quarantined_rule(rule_name, _resolve_rules_dir())
+
+
+def reject_rule(rule_name: str, reason: str = "") -> Dict[str, Any]:
+    """Reject a quarantined rule: delete it, keep a rejected metadata record."""
+    return reject_quarantined_rule(rule_name, _resolve_rules_dir(), reason=reason)
+

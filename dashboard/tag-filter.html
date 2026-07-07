@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Tag Filter</title>
+<style>
+body{font-family:monospace;background:#111;color:#ddd;padding:20px}
+.tag{display:inline-block;margin:4px;padding:6px 10px;border:1px solid #444;border-radius:4px;cursor:pointer}
+.tag.selected{background:#2a5;border-color:#2a5}
+.tag .badge{color:#f55;font-weight:bold;margin-left:6px}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+td,th{border:1px solid #333;padding:6px;text-align:left;font-size:13px}
+.q{color:#f55}
+button{margin-top:12px;padding:8px 16px;background:#2a5;border:none;color:#fff;cursor:pointer}
+#result{margin-top:10px;white-space:pre-wrap}
+</style></head>
+<body>
+<h2>Tag Filter Dashboard</h2>
+<div id="tags"></div>
+<table id="rules"><thead><tr><th>Name</th><th>Type</th><th>Tags</th><th>Status</th></tr></thead><tbody></tbody></table>
+<button onclick="deploy()">Deploy Selected Tags (dry-run)</button>
+<div id="result"></div>
+<script>
+let selected = new Set();
+async function loadTags(){
+  const r = await fetch('/api/tags'); const data = await r.json();
+  const div = document.getElementById('tags'); div.innerHTML='';
+  for(const [tag, c] of Object.entries(data)){
+    const el = document.createElement('span');
+    el.className = 'tag' + (selected.has(tag) ? ' selected':'');
+    el.textContent = tag + ' (' + c.active_count + ')';
+    if(c.quarantine_count > 0){
+      const b = document.createElement('span'); b.className='badge'; b.textContent = 'Q:' + c.quarantine_count;
+      el.appendChild(b);
+    }
+    el.onclick = () => { selected.has(tag) ? selected.delete(tag) : selected.add(tag); loadTags(); loadRules(); };
+    div.appendChild(el);
+  }
+}
+async function loadRules(){
+  const tbody = document.querySelector('#rules tbody'); tbody.innerHTML='';
+  const tags = selected.size ? [...selected] : [null];
+  const seen = new Set();
+  for(const t of tags){
+    const url = t ? '/api/rules?tag=' + encodeURIComponent(t) : '/api/rules';
+    const r = await fetch(url); const rows = await r.json();
+    for(const row of rows){
+      const key = row.name + row.type;
+      if(seen.has(key)) continue; seen.add(key);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${row.name}</td><td>${row.type}</td><td>${row.tags.join(', ')}</td><td class="${row.status==='quarantine'?'q':''}">${row.status}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+}
+async function deploy(){
+  const res = document.getElementById('result');
+  const r = await fetch('/api/deploy-filtered', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({dry_run:true, tags:[...selected]})});
+  res.textContent = JSON.stringify(await r.json(), null, 2);
+}
+loadTags(); loadRules();
+</script>
+</body></html>

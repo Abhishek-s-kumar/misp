@@ -20,7 +20,10 @@ from mcp_tools.rule_tools import (
     deploy_rules,
     rollback_rules,
     rule_status,
-    sync_github_rules
+    sync_github_rules,
+    list_quarantine,
+    promote_rule,
+    reject_rule
 )
 
 # Register tools
@@ -30,6 +33,9 @@ mcp.add_tool(deploy_rules)
 mcp.add_tool(rollback_rules)
 mcp.add_tool(rule_status)
 mcp.add_tool(sync_github_rules)
+mcp.add_tool(list_quarantine)
+mcp.add_tool(promote_rule)
+mcp.add_tool(reject_rule)
 
 if __name__ == "__main__":
     mcp.run()
