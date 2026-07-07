@@ -22,6 +22,7 @@ concepts with no GitHub equivalent -- synthesized:
 """
 
 import base64
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -94,6 +95,16 @@ class GitHubRepoSource:
             return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
         return data.get("content", "")
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _fetch_raw_content(self, path: str, ref: str) -> str:
+        """Fetch file content via raw.githubusercontent.com CDN instead of the
+        git/blobs REST API -- avoids GitHub's secondary rate limit on repeated
+        blob API calls, which the retry/backoff alone could not survive."""
+        url = f"https://raw.githubusercontent.com/{self.repo}/{ref}/{path}"
+        resp = requests.get(url, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+        return resp.text
+
     @staticmethod
     def _get_extension(filename: str) -> str:
         dot_idx = filename.rfind(".")
@@ -137,31 +148,39 @@ class GitHubRepoSource:
 
         def _fetch_one(entry):
             try:
-                return entry, self._fetch_blob_content(entry["url"]), None
+                return entry, self._fetch_raw_content(entry["path"], head_sha), None
             except Exception as e:
                 return entry, None, e
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = [pool.submit(_fetch_one, e) for e in in_scope]
-            for i, future in enumerate(as_completed(futures), start=1):
-                entry, content, err = future.result()
-                if err is not None:
-                    log.warning("github_blob_fetch_failed", path=entry["path"], error=str(err))
-                    continue
-                ext = self._get_extension(entry["path"])
-                raw_rules.append(
-                    RawRule(
-                        rule_type=EXTENSION_MAP[ext],
-                        name=entry["path"].replace("/", "__"),
-                        content=content,
-                        event_id=event_id,
-                        event_uuid=entry["sha"],
-                        misp_timestamp=datetime.now(timezone.utc),
-                        tags=list(self.extra_tags) + [f"repo:{self.repo}"],
+        BATCH_SIZE = 40
+        BATCH_DELAY_SECONDS = 2.0
+        MAX_WORKERS = 4
+
+        for batch_start in range(0, len(in_scope), BATCH_SIZE):
+            batch = in_scope[batch_start:batch_start + BATCH_SIZE]
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+                futures = [pool.submit(_fetch_one, e) for e in batch]
+                for future in as_completed(futures):
+                    entry, content, err = future.result()
+                    if err is not None:
+                        log.warning("github_blob_fetch_failed", path=entry["path"], error=str(err))
+                        continue
+                    ext = self._get_extension(entry["path"])
+                    raw_rules.append(
+                        RawRule(
+                            rule_type=EXTENSION_MAP[ext],
+                            name=entry["path"].replace("/", "__"),
+                            content=content,
+                            event_id=event_id,
+                            event_uuid=entry["sha"],
+                            misp_timestamp=datetime.now(timezone.utc),
+                            tags=list(self.extra_tags) + [f"repo:{self.repo}"],
+                        )
                     )
-                )
-                if i % 50 == 0 or i == len(in_scope):
-                    log.info("github_source_fetch_progress", repo=self.repo, done=i, total=len(in_scope))
+            done = min(batch_start + BATCH_SIZE, len(in_scope))
+            log.info("github_source_fetch_progress", repo=self.repo, done=done, total=len(in_scope))
+            if done < len(in_scope):
+                time.sleep(BATCH_DELAY_SECONDS)
 
         log.info("github_source_rules_fetched", repo=self.repo, count=len(raw_rules))
         return raw_rules, head_sha, True
