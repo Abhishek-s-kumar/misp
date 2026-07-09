@@ -1,25 +1,33 @@
 """
 Native Sigma -> Wazuh XML converter, walking pySigma's parsed rule model
-directly (no official Wazuh backend exists in pySigma, so we don't route
-through `sigma convert --target`).
+directly (no official Wazuh backend exists in pySigma).
 
-Scope:
-- AND-only field combination (implicit AND across Wazuh <field> children).
-  Covers a single `selection` block or `all of selection*` conditions.
-- Multiple values on one field (Sigma list = OR) -> regex alternation.
-- Cross-field OR / NOT conditions are NOT converted -- they are flagged
-  needs_manual_review so they never silently become dead or wrong rules.
-- FIELD_MAP is site-specific and incomplete by design -- fill in as you
-  confirm your Wazuh decoder field names. Unmapped fields pass through
-  unchanged with a logged warning.
+Scope (post-DNF upgrade):
+- OR conditions distribute into disjunctive normal form -- each OR-alternative
+  becomes its own Wazuh <rule>, all under one <group>. One Sigma rule can fan
+  out into several Wazuh rules.
+- AND conditions combine into <field> elements on the same rule. Same-field
+  literals merge: positives via PCRE2 lookahead conjunction, negatives via
+  alternation under one negate="yes".
+- NOT is handled via De Morgan: NOT(A OR B) == NOT(A) AND NOT(B).
+- Cartesian-product cap (500) on AND-distribution -- prevents pathological
+  nested OR/AND from exploding into an unbounded number of rules.
+- FIELD_MAP now loads from field_mappings.yaml at the repo root (falls back
+  to a small built-in default if that file is missing/invalid).
+- Anything still unsupported (field-less keyword match, non-string leaf
+  values) raises NotImplementedError/ValueError -- caller (sigma_converter.py)
+  turns that into SigmaConversionUnsupported. No silent/mock output here.
 """
-
 from __future__ import annotations
+import itertools
+import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 import structlog
+import yaml as _yaml
 from sigma.rule import SigmaRule
 from sigma.conditions import (
     ConditionAND,
@@ -32,9 +40,15 @@ from sigma.types import SigmaString, SigmaNumber, SigmaBool, SigmaRegularExpress
 
 log = structlog.get_logger()
 
-# Sigma taxonomy field name -> your Wazuh decoded field name.
-# TODO: confirm each against your actual decoders before trusting matches.
-FIELD_MAP: dict[str, str] = {
+MAX_AND_CLAUSE_PRODUCT = 500
+
+# Repo-root field_mappings.yaml (this file lives at <repo_root>/processors/).
+_FIELD_MAPPINGS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "field_mappings.yaml"
+)
+
+# Minimal built-in fallback, same as the original hardcoded FIELD_MAP.
+_DEFAULT_FIELD_MAP: dict[str, str] = {
     "Image": "win.eventdata.image",
     "CommandLine": "win.eventdata.commandLine",
     "ParentImage": "win.eventdata.parentImage",
@@ -42,6 +56,22 @@ FIELD_MAP: dict[str, str] = {
     "DestinationIp": "win.eventdata.destinationIp",
     "User": "win.eventdata.user",
 }
+
+
+def load_field_mappings(path: str = _FIELD_MAPPINGS_PATH) -> dict[str, str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f)
+    except FileNotFoundError:
+        log.warning("field_mappings_file_not_found", path=path)
+        return dict(_DEFAULT_FIELD_MAP)
+    if not isinstance(data, dict) or not data:
+        log.warning("field_mappings_file_empty_or_invalid", path=path)
+        return dict(_DEFAULT_FIELD_MAP)
+    return {str(k): str(v) for k, v in data.items()}
+
+
+FIELD_MAP: dict[str, str] = load_field_mappings()
 
 
 @dataclass
@@ -71,91 +101,85 @@ def _value_to_regex(value) -> str:
     return f"^{re.escape(str(value))}$"
 
 
-def _field_item_to_xml(field: str, values: list, negate: bool = False) -> str:
-    wazuh_field = _map_field(field)
-    if len(values) == 1:
-        regex = _value_to_regex(values[0])
-    else:
-        alts = "|".join(_value_to_regex(v).strip("^$") for v in values)
-        regex = f"^({alts})$"
-    negate_attr = ' negate="yes"' if negate else ""
-    return f'    <field name="{wazuh_field}" type="pcre2"{negate_attr}>{regex}</field>'
+def _merge_field_literals(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """Merge literals for the SAME Wazuh field within one AND-clause.
+    Same polarity collapses (lookahead AND / alternation OR); a positive and a
+    negated literal on the same field stay as two separate <field> elements."""
+    result = [dict(lit) for lit in existing]
+    for lit in incoming:
+        same = next((e for e in result if e["negate"] == lit["negate"]), None)
+        if same is None:
+            result.append(dict(lit))
+        elif lit["negate"]:
+            same["pattern"] = f"(?:{same['pattern']})|(?:{lit['pattern']})"
+        else:
+            same["pattern"] = f"(?=.*{same['pattern']})(?=.*{lit['pattern']})"
+    return result
 
 
-def _negatable_field_extraction(node) -> "tuple[str, list] | None":
-    """
-    Extracts (field, values) from a node if it is simple enough to express
-    as a single negated Wazuh <field negate="yes">. Handles a single
-    FieldEqualsValueExpression, or an OR of FieldEqualsValueExpression nodes
-    that all share the same field (e.g. "not 1 of filter_main_*" where the
-    filter selections are same-field alternatives). Returns None -- caller
-    must flag for manual review -- for anything else (cross-field OR, nested
-    AND, etc.), since those cannot be safely collapsed into one field.
-    """
-    if isinstance(node, ConditionFieldEqualsValueExpression):
-        return node.field, [node.value]
+def _and_clauses(clause_lists: list[list[dict]]) -> list[dict]:
+    """AND together several DNF operands via cartesian product, capped."""
+    product_size = math.prod(len(c) for c in clause_lists) if clause_lists else 1
+    if product_size > MAX_AND_CLAUSE_PRODUCT:
+        raise ValueError(
+            f"AND clause cartesian product too large ({product_size} > "
+            f"{MAX_AND_CLAUSE_PRODUCT}): nested OR/AND structure would explode "
+            f"into too many rules. Simplify the condition."
+        )
+    result: list[dict] = []
+    for combo in itertools.product(*clause_lists):
+        merged: dict = {}
+        for clause in combo:
+            for field, literals in clause.items():
+                if field in merged:
+                    merged[field] = _merge_field_literals(merged[field], literals)
+                else:
+                    merged[field] = [dict(lit) for lit in literals]
+        result.append(merged)
+    return result
+
+
+def evaluate_ast(node) -> list[dict]:
+    """Recursive DNF walk. Returns list of OR-alternatives; each alternative
+    maps a Wazuh field name to a list of {"pattern": str, "negate": bool}."""
     if isinstance(node, ConditionOR):
-        field_names = set()
-        values = []
+        result: list[dict] = []
         for arg in node.args:
-            if not isinstance(arg, ConditionFieldEqualsValueExpression):
-                return None
-            field_names.add(arg.field)
-            values.append(arg.value)
-        if len(field_names) == 1:
-            return next(iter(field_names)), values
-    return None
+            result.extend(evaluate_ast(arg))
+        return result
 
-
-def _walk_condition(node) -> tuple[list[str], bool]:
-    """Returns (field xml lines, needs_manual_review)."""
     if isinstance(node, ConditionAND):
-        lines: list[str] = []
-        review = False
-        for arg in node.args:
-            if isinstance(arg, ConditionNOT):
-                negated = _negatable_field_extraction(arg.args[0])
-                if negated is not None:
-                    field, values = negated
-                    lines.append(_field_item_to_xml(field, values, negate=True))
-                    continue
-                review = True
-                continue
-            sub_lines, sub_review = _walk_condition(arg)
-            lines.extend(sub_lines)
-            review = review or sub_review
-        return lines, review
+        args_eval = [evaluate_ast(arg) for arg in node.args]
+        return _and_clauses(args_eval)
+
+    if isinstance(node, ConditionNOT):
+        child_evals = evaluate_ast(node.args[0])
+        negated_operands: list[list[dict]] = []
+        for clause in child_evals:
+            alternatives = [
+                {field: [{"pattern": lit["pattern"], "negate": not lit["negate"]}]}
+                for field, lits in clause.items()
+                for lit in lits
+            ]
+            if alternatives:
+                negated_operands.append(alternatives)
+        if not negated_operands:
+            return [{}]
+        return _and_clauses(negated_operands)
 
     if isinstance(node, ConditionFieldEqualsValueExpression):
-        return [_field_item_to_xml(node.field, [node.value])], False
+        wazuh_field = _map_field(node.field)
+        pattern = _value_to_regex(node.value)
+        return [{wazuh_field: [{"pattern": pattern, "negate": False}]}]
 
-    if isinstance(node, ConditionOR):
-        # Sigma's default list semantics are OR (e.g. CommandLine|contains: [a, b, c]
-        # without |all). If every branch is a FieldEqualsValueExpression on the SAME
-        # field, this collapses cleanly into one Wazuh <field> with regex alternation.
-        # Cross-field OR (different field names) cannot collapse into Wazuh's AND-only
-        # field schema -- that case still correctly falls through to needs_manual_review.
-        field_names = set()
-        values = []
-        all_simple = True
-        for arg in node.args:
-            if isinstance(arg, ConditionFieldEqualsValueExpression):
-                field_names.add(arg.field)
-                values.append(arg.value)
-            else:
-                all_simple = False
-                break
-        if all_simple and len(field_names) == 1:
-            field = next(iter(field_names))
-            return [_field_item_to_xml(field, values)], False
-        return [], True
-
-    if isinstance(node, (ConditionNOT, ConditionValueExpression)):
-        # Not representable as a single Wazuh rule -- flag, don't fake.
-        return [], True
+    if isinstance(node, ConditionValueExpression):
+        raise NotImplementedError(
+            "Unsupported Sigma construct: field-less keyword match would emit "
+            "a rule with no <field> constraints, matching every event."
+        )
 
     log.warning("sigma_condition_node_unhandled", node_type=type(node).__name__)
-    return [], True
+    raise NotImplementedError(f"Unsupported Sigma condition node: {type(node).__name__}")
 
 
 def convert_rule(sigma_rule: SigmaRule, wazuh_level: int, rule_id: int) -> ConversionResult:
@@ -164,31 +188,40 @@ def convert_rule(sigma_rule: SigmaRule, wazuh_level: int, rule_id: int) -> Conve
         if not conditions:
             return ConversionResult(None, True, "no parsed condition")
 
-        all_lines: list[str] = []
-        any_review = False
+        clauses: list[dict] = []
         for cond in conditions:
-            tree = cond.parsed
-            lines, review = _walk_condition(tree)
-            all_lines.extend(lines)
-            any_review = any_review or review
+            clauses.extend(evaluate_ast(cond.parsed))
 
-        if any_review or not all_lines:
-            return ConversionResult(
-                None, True,
-                "condition uses OR/NOT or is otherwise unsupported; needs manual rule split",
+        if not clauses:
+            return ConversionResult(None, True, "condition produced no clauses")
+
+        rule_blocks = []
+        for idx, fields in enumerate(clauses):
+            if not fields:
+                return ConversionResult(
+                    None, True,
+                    "clause has no field constraints (unsupported keyword-only condition)",
+                )
+            field_lines = []
+            for field, literals in fields.items():
+                for lit in literals:
+                    negate_attr = ' negate="yes"' if lit["negate"] else ""
+                    field_lines.append(
+                        f'    <field name="{field}" type="pcre2"{negate_attr}>{lit["pattern"]}</field>'
+                    )
+            desc = sigma_rule.title if len(clauses) == 1 else f"{sigma_rule.title} (Part {idx + 1})"
+            rule_blocks.append(
+                f'  <rule id="{rule_id + idx}" level="{wazuh_level}">\n'
+                + "\n".join(field_lines) + "\n"
+                f"    <description>{desc}</description>\n"
+                f"  </rule>"
             )
 
-        fields_xml = "\n".join(all_lines)
-        xml = (
-            f'<group name="sigma,misp,">\n'
-            f'  <rule id="{rule_id}" level="{wazuh_level}">\n'
-            f'{fields_xml}\n'
-            f"    <description>{sigma_rule.title}</description>\n"
-            f"  </rule>\n"
-            f"</group>"
-        )
+        xml = '<group name="sigma,misp,">\n' + "\n".join(rule_blocks) + "\n</group>"
         return ConversionResult(xml, False)
 
+    except (NotImplementedError, ValueError) as e:
+        return ConversionResult(None, True, str(e))
     except Exception as e:
         log.error("sigma_native_conversion_error", rule=sigma_rule.title, error=str(e))
         return ConversionResult(None, True, str(e))

@@ -1,16 +1,15 @@
 """
 Sigma -> Wazuh XML conversion.
 
-No official Wazuh backend exists for pySigma/sigma-cli (verified via
-`sigma plugin list` -- Wazuh is absent from all registered backends), so
-conversion is done natively by walking pySigma's parsed rule model
-directly. See sigma_to_wazuh_native.py for the AND-only field-mapping
-logic and its documented scope limits.
+No official Wazuh backend exists for pySigma/sigma-cli, so conversion is done
+natively by walking pySigma's parsed rule model directly. See
+sigma_to_wazuh_native.py for the DNF/De Morgan field-mapping logic and its
+documented scope limits.
 
-Mock conversion remains ONLY as a last-resort fallback for rules that
-fail to parse at all, and is clearly tagged in both the log and the
-returned XML's description so it can never be mistaken for a real
-detection in dashboards or audits.
+Rules the native converter cannot translate soundly raise
+SigmaConversionUnsupported -- caller (xml_merger.py) catches this and skips
+the rule from the compiled ruleset with a logged reason, instead of emitting
+a placeholder rule with no detection logic.
 """
 
 from pathlib import Path
@@ -34,20 +33,25 @@ LEVEL_MAP = {"low": 3, "medium": 5, "high": 10, "critical": 15}
 _PLACEHOLDER_RULE_ID = 100000
 
 
-def convert_sigma_to_wazuh(
-    sigma_content: str, sigma_name: str
-) -> Optional[str]:
+class SigmaConversionUnsupported(Exception):
+    """Raised when the native converter cannot soundly translate a Sigma rule."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def convert_sigma_to_wazuh(sigma_content: str, sigma_name: str) -> Optional[str]:
     """
     Convert a Sigma YAML rule to Wazuh XML format via native pySigma
     rule-object walking.
 
-    Args:
-        sigma_content: Raw Sigma YAML rule content.
-        sigma_name: Filename of the Sigma rule (for logging).
-
     Returns:
-        Wazuh XML string if conversion succeeds (native or mock
-        fallback), None only if the rule cannot be parsed as Sigma at all.
+        Wazuh XML string on success.
+        None only if the rule cannot be parsed as Sigma at all.
+    Raises:
+        SigmaConversionUnsupported if the rule parses but its condition logic
+        cannot be soundly translated (caller should skip/quarantine it).
     """
     try:
         collection = SigmaCollection.from_yaml(sigma_content)
@@ -76,34 +80,5 @@ def convert_sigma_to_wazuh(
         "sigma_native_conversion_unsupported",
         rule=sigma_name,
         reason=result.reason,
-        message="falling back to mock XML -- rule has NO detection logic, needs manual conversion",
     )
-    return _mock_sigma_to_wazuh(sigma_content, sigma_name)
-
-
-def _mock_sigma_to_wazuh(sigma_content: str, sigma_name: str) -> str:
-    """
-    Fallback for rules the native converter cannot handle (OR/NOT logic,
-    unparseable structure). Deliberately tagged '[NEEDS MANUAL REVIEW -
-    NO DETECTION LOGIC]' in the description so this can never be confused
-    with a real, firing rule in Wazuh's dashboard or rule count.
-    """
-    import yaml
-
-    try:
-        sigma = yaml.safe_load(sigma_content)
-    except Exception:
-        sigma = {}
-    title = sigma.get("title", sigma_name) if isinstance(sigma, dict) else sigma_name
-    level = sigma.get("level", "medium") if isinstance(sigma, dict) else "medium"
-    wazuh_level = LEVEL_MAP.get(level, 5)
-
-    xml = (
-        f'<group name="sigma,misp,needs_review,">\n'
-        f'  <rule id="{_PLACEHOLDER_RULE_ID}" level="{wazuh_level}">\n'
-        f"    <description>{title} [NEEDS MANUAL REVIEW - NO DETECTION LOGIC]</description>\n"
-        f"  </rule>\n"
-        f"</group>"
-    )
-    log.warning("sigma_mock_conversion_used", rule=sigma_name)
-    return xml
+    raise SigmaConversionUnsupported(result.reason or "unsupported condition logic")

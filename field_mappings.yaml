@@ -1,0 +1,16 @@
+# Sigma field name -> Wazuh decoder field name.
+Image: win.eventdata.image
+OriginalFileName: win.eventdata.originalFileName
+CommandLine: win.eventdata.commandLine
+CurrentDirectory: win.eventdata.currentDirectory
+User: win.eventdata.user
+ParentImage: win.eventdata.parentImage
+ParentCommandLine: win.eventdata.parentCommandLine
+ProcessId: win.eventdata.processId
+ParentProcessId: win.eventdata.parentProcessId
+TargetFilename: win.eventdata.targetFilename
+DestinationIp: win.eventdata.destinationIp
+TargetObject: win.eventdata.targetObject
+DestinationPort: win.eventdata.destinationPort
+SourceIp: win.eventdata.sourceIp
+file: syscheck.path

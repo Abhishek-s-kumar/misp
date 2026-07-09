@@ -13,7 +13,7 @@ from processors.deduplicator import (
     compute_yara_hash,
     compute_wazuh_hash,
 )
-from processors.sigma_converter import convert_sigma_to_wazuh, _mock_sigma_to_wazuh
+from processors.sigma_converter import convert_sigma_to_wazuh, SigmaConversionUnsupported
 from processors.xml_merger import (
     next_available_id,
     get_or_assign_sigma_id,
@@ -153,12 +153,23 @@ class TestProcessors(unittest.TestCase):
         xml = convert_sigma_to_wazuh("not: valid: sigma: [[[", "broken.yml")
         self.assertIsNone(xml)
 
-    def test_sigma_mock_fallback(self):
-        sigma_yml = "title: Process Creation\nlevel: high"
-        xml = _mock_sigma_to_wazuh(sigma_yml, "test_mock.yml")
-        self.assertIn("<group name=\"sigma,misp,needs_review,\">", xml)
-        self.assertIn("Process Creation [NEEDS MANUAL REVIEW - NO DETECTION LOGIC]", xml)
-        self.assertIn("level=\"10\"", xml)  # high maps to 10
+    def test_sigma_unsupported_condition_raises(self):
+        # OR across different fields cannot collapse into Wazuh's AND-only
+        # <field> schema in a single rule -- but DNF distribution means this
+        # now succeeds as TWO Wazuh rules, not a raise. Use a genuinely
+        # unsupported construct instead: field-less keyword match.
+        sigma_yml = (
+            "title: Keyword Only\n"
+            "level: high\n"
+            "logsource:\n"
+            "  product: windows\n"
+            "detection:\n"
+            "  keywords:\n"
+            "    - suspicious_string\n"
+            "  condition: keywords\n"
+        )
+        with self.assertRaises(SigmaConversionUnsupported):
+            convert_sigma_to_wazuh(sigma_yml, "test_keyword.yml")
 
     def test_compute_sigma_hash(self):
         # Nested keys & different ordering must produce the same hash

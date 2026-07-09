@@ -227,6 +227,15 @@ def rebuild_local_rules(rules_dir: Path):
                 xml_parts.append(overridden)
             except Exception as e:
                 log.error("failed_to_convert_sigma_rule_for_merge", file=str(f), error=str(e))
+                meta_file = generated_dir / "metadata" / f"{f.stem}.json"
+                if meta_file.exists():
+                    try:
+                        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                        meta["deployment_status"] = "conversion_failed"
+                        meta["conversion_error"] = str(e)
+                        meta_file.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+                    except Exception as meta_err:
+                        log.warning("failed_to_update_conversion_failure_metadata", file=str(meta_file), error=str(meta_err))
 
     # 3. Merge and compile
     merged_xml = merge_wazuh_xml_files(xml_parts)
@@ -272,6 +281,10 @@ def build_filtered_rules_xml(rules_dir: Path, rule_names=None, tags=None) -> str
             if not wazuh_rule_id:
                 continue
             cache_file = cache_dir / f"{f.stem}.xml"
-            wazuh_xml = cache_file.read_text(encoding="utf-8") if cache_file.exists() else convert_sigma_to_wazuh(f.read_text(encoding="utf-8"), f.name)
-            xml_parts.append(override_xml_rule_ids(wazuh_xml, wazuh_rule_id))
+            try:
+                wazuh_xml = cache_file.read_text(encoding="utf-8") if cache_file.exists() else convert_sigma_to_wazuh(f.read_text(encoding="utf-8"), f.name)
+                xml_parts.append(override_xml_rule_ids(wazuh_xml, wazuh_rule_id))
+            except Exception as e:
+                log.error("failed_to_convert_sigma_rule_for_filtered_deploy", file=str(f), error=str(e))
+                continue
     return merge_wazuh_xml_files(xml_parts)
