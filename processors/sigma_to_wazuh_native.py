@@ -41,6 +41,7 @@ from sigma.types import SigmaString, SigmaNumber, SigmaBool, SigmaRegularExpress
 log = structlog.get_logger()
 
 MAX_AND_CLAUSE_PRODUCT = 500
+MAX_TOTAL_CLAUSES = 50  # cap on total Wazuh rules one Sigma rule can fan out to
 
 # Repo-root field_mappings.yaml (this file lives at <repo_root>/processors/).
 _FIELD_MAPPINGS_PATH = os.path.join(
@@ -194,6 +195,15 @@ def convert_rule(sigma_rule: SigmaRule, wazuh_level: int, rule_id: int) -> Conve
 
         if not clauses:
             return ConversionResult(None, True, "condition produced no clauses")
+
+        if len(clauses) > MAX_TOTAL_CLAUSES:
+            return ConversionResult(
+                None, True,
+                f"condition fans out to {len(clauses)} Wazuh rules, exceeding "
+                f"MAX_TOTAL_CLAUSES ({MAX_TOTAL_CLAUSES}); likely a large enumerated "
+                f"OR list (e.g. unicode/character-class alternatives) rather than "
+                f"genuine detection branching. Needs manual review/rewrite.",
+            )
 
         rule_blocks = []
         for idx, fields in enumerate(clauses):

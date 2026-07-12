@@ -8,6 +8,7 @@ body{font-family:monospace;background:#111;color:#ddd;padding:20px}
 table{width:100%;border-collapse:collapse;margin-top:16px}
 td,th{border:1px solid #333;padding:6px;text-align:left;font-size:13px}
 .q{color:#f55}
+.cf{color:#f90}
 button{margin-top:12px;padding:8px 16px;background:#2a5;border:none;color:#fff;cursor:pointer}
 #result{margin-top:10px;white-space:pre-wrap}
 </style></head>
@@ -45,7 +46,8 @@ async function loadRules(){
       const key = row.name + row.type;
       if(seen.has(key)) continue; seen.add(key);
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${row.name}</td><td>${row.type}</td><td>${row.tags.join(', ')}</td><td class="${row.status==='quarantine'?'q':''}">${row.status}</td>`;
+      const statusClass = row.status === 'quarantine' ? 'q' : row.status === 'conversion_failed' ? 'cf' : '';
+      tr.innerHTML = `<td>${row.name}</td><td>${row.type}</td><td>${row.tags.join(', ')}</td><td class="${statusClass}">${row.status}</td>`;
       tbody.appendChild(tr);
     }
   }

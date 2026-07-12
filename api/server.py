@@ -153,7 +153,15 @@ def api_rules(tag: str = None):
                     pass
             if tag and tag not in tags:
                 continue
-            out.append({"name": f.name, "type": rule_type, "tags": tags, "status": "active"})
+            status = "active"
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    if meta.get("deployment_status") == "conversion_failed":
+                        status = "conversion_failed"
+                except Exception:
+                    pass
+            out.append({"name": f.name, "type": rule_type, "tags": tags, "status": status})
     for entry in list_quarantine():
         if tag and tag not in entry.get("tags", []):
             continue

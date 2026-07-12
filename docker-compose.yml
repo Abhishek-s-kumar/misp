@@ -14,4 +14,11 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
     env_file:
       - .env
+    networks:
+      - default
+      - misp-docker_default
     restart: unless-stopped
+
+networks:
+  misp-docker_default:
+    external: true
